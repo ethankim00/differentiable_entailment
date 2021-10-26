@@ -27,9 +27,16 @@ import numpy as np
 from tqdm import trange, tqdm
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import RandomSampler, DataLoader, SequentialSampler
+
 # from torch.cuda.amp import autocast, GradScaler
-from transformers import AdamW, get_linear_schedule_with_warmup, \
-    AutoModelForMaskedLM, AutoConfig, AutoTokenizer, GPT2LMHeadModel  # TODO
+from transformers import (
+    AdamW,
+    get_linear_schedule_with_warmup,
+    AutoModelForMaskedLM,
+    AutoConfig,
+    AutoTokenizer,
+    GPT2LMHeadModel,
+)  # TODO
 
 import logging
 from data_utils import PVPS, load_task_helper, load_metrics, evaluate_results
@@ -38,13 +45,29 @@ from utils import InputExample, InputFeatures, DictDataset
 from encoder import PromptEncoder
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger('model')
+logger = logging.getLogger("model")
 
-CONFIG_NAME = 'wrapper_config.json'
+CONFIG_NAME = "wrapper_config.json"
 
 
 class ContinuousPrompt(nn.Module):
+    """
+    Class for ContinuousPrompt
+    - What does it do?
+    - Why is it a torch module?
+    """
+
     def __init__(self, config: WrapperConfig, tokenizer, pvp):
+        """Initialize continuous prompt object
+
+        Args:
+            config (WrapperConfig):
+            tokenizer ([type]):
+            pvp ([type]): Pattern Verbalizer Pair - What format?
+
+        Raises:
+            ValueError: [description]
+        """
         super(ContinuousPrompt, self).__init__()
         self.config = config
         self.tokenizer = tokenizer
@@ -52,6 +75,7 @@ class ContinuousPrompt(nn.Module):
         self.hidden_size = self.embed_size
 
         # The pattern_id is supposed to indicate the number of continuous prompt tokens.
+        # Determine number of continuous prompt tokens - probably something that we tune
         prompt_length = 0
         for idx, val in enumerate(pvp.BLOCK_FLAG):
             if val == 1:
@@ -63,31 +87,44 @@ class ContinuousPrompt(nn.Module):
             config.model_name_or_path,
             num_labels=len(config.label_list),
             finetuning_task=config.task_name,
-            cache_dir=config.cache_dir if config.cache_dir else None)
+            cache_dir=config.cache_dir if config.cache_dir else None,
+        )
 
         # model_class = MODEL_CLASSES[self.config.model_type]['model']
+        # Load a huggingface model
+        # Should mainly be our ROBERTA for MLM default
         self.model = AutoModelForMaskedLM.from_pretrained(
             config.model_name_or_path,
             config=model_config,
-            cache_dir=config.cache_dir if config.cache_dir else None)
+            cache_dir=config.cache_dir if config.cache_dir else None,
+        )
 
-        self.prompt_embeddings = torch.nn.Embedding(
-            self.prompt_length, self.embed_size)
+        # Initialize
+        self.prompt_embeddings = torch.nn.Embedding(self.prompt_length, self.embed_size)
+
+        # Initialize modules for prompt encoding
+        # LSTM is equivalent to p tuning paer
+        # MLP is DART main method?
         if config.prompt_encoder_type == "lstm":
-            self.lstm_head = torch.nn.LSTM(input_size=self.hidden_size,
-                                           hidden_size=self.hidden_size,
-                                           num_layers=2,
-                                           bidirectional=True,
-                                           batch_first=True)
-            self.mlp_head = nn.Sequential(nn.Linear(2 * self.hidden_size, self.hidden_size),
-                                          nn.ReLU(),
-                                          nn.Linear(self.hidden_size, self.hidden_size))
+            self.lstm_head = torch.nn.LSTM(
+                input_size=self.hidden_size,
+                hidden_size=self.hidden_size,
+                num_layers=2,
+                bidirectional=True,
+                batch_first=True,
+            )
+            self.mlp_head = nn.Sequential(
+                nn.Linear(2 * self.hidden_size, self.hidden_size),
+                nn.ReLU(),
+                nn.Linear(self.hidden_size, self.hidden_size),
+            )
 
         elif config.prompt_encoder_type == "mlp":
             self.mlp = torch.nn.Sequential(
                 torch.nn.Linear(self.hidden_size, self.hidden_size),
                 torch.nn.ReLU(),
-                torch.nn.Linear(self.hidden_size, self.hidden_size))
+                torch.nn.Linear(self.hidden_size, self.hidden_size),
+            )
 
         elif config.prompt_encoder_type in {"none", "inner"}:
             # Manual prompt without continuous tuning, or:
@@ -95,7 +132,7 @@ class ContinuousPrompt(nn.Module):
             pass
 
         else:
-            raise ValueError('unknown prompt_encoder_type.')
+            raise ValueError("unknown prompt_encoder_type.")
 
 
 class TransformerModelWrapper(object):
@@ -105,34 +142,49 @@ class TransformerModelWrapper(object):
         self.config = config
 
         # tokenizer_class = MODEL_CLASSES[config.model_type]['tokenizer']
+        # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
             config.model_name_or_path,
             cache_dir=config.cache_dir if config.cache_dir else None,
-            use_fast=False)
+            use_fast=False,
+        )
 
+        # Load pattern verbalizer pairs based on config
         self.pvp = PVPS[config.task_name](self, config.pattern_id)
+        # Initialize continuous prmpt model
         self.model = ContinuousPrompt(config, self.tokenizer, self.pvp)
         self.task_helper = load_task_helper(config.task_name, self)
-        self.label_map = {label: i for i,
-                          label in enumerate(self.config.label_list)}
+        self.label_map = {label: i for i, label in enumerate(self.config.label_list)}
 
         if config.prompt_encoder_type == "inner":
             self.encoder = PromptEncoder(
-                self.tokenizer, self.pvp, config.label_list)
+                self.tokenizer, self.pvp, config.label_list
+            )  # Initialize prompt encoder
             # Random init prompt tokens HERE!
             self.encoder.init_embed(self.model.model, random_=False)
 
-        if config.device == 'cuda':
-            if torch.cuda.device_count() > 1:
+        if config.device == "cuda":
+            if (
+                torch.cuda.device_count() > 1
+            ):  # Should be able to easily do Data Paralellism
                 self.model = torch.nn.DataParallel(self.model)
             self.model.cuda()
             # Use automatic mixed precision for faster training
             # self.scaler = GradScaler()
 
     def save(self, path: str) -> None:
+        """Logic to save all the addition torch nn modules to file
+
+        Args:
+            path (str):
+
+        Raises:
+            ValueError: [description]
+        """
         logger.info("Saving trained model at %s..." % path)
-        model_to_save = self.model.module if hasattr(
-            self.model, 'module') else self.model
+        model_to_save = (
+            self.model.module if hasattr(self.model, "module") else self.model
+        )
 
         model_to_save.model.save_pretrained(path)
         self.tokenizer.save_pretrained(path)
@@ -142,12 +194,12 @@ class TransformerModelWrapper(object):
             state = {
                 "prompt_embeddings": model_to_save.prompt_embeddings.state_dict(),
                 "lstm_head": model_to_save.lstm_head.state_dict(),
-                "mlp_head": model_to_save.mlp_head.state_dict()
+                "mlp_head": model_to_save.mlp_head.state_dict(),
             }
         elif self.config.prompt_encoder_type == "mlp":
             state = {
                 "prompt_embeddings": model_to_save.prompt_embeddings.state_dict(),
-                "mlp": model_to_save.mlp.state_dict()
+                "mlp": model_to_save.mlp.state_dict(),
             }
         elif self.config.prompt_encoder_type in {"none", "inner"}:
             state = {
@@ -160,16 +212,14 @@ class TransformerModelWrapper(object):
         torch.save(state, save_path_file)
 
     @classmethod
-    def from_pretrained(cls, path: str) -> 'TransformerModelWrapper':
+    def from_pretrained(cls, path: str) -> "TransformerModelWrapper":
         """Load a pretrained wrapper from a given path."""
 
         wrapper = TransformerModelWrapper.__new__(TransformerModelWrapper)
         wrapper.config = wrapper._load_config(path)
         wrapper.tokenizer = AutoTokenizer.from_pretrained(path, use_fast=False)
-        wrapper.pvp = PVPS[wrapper.config.task_name](
-            wrapper, wrapper.config.pattern_id)
-        wrapper.model = ContinuousPrompt(
-            wrapper.config, wrapper.tokenizer, wrapper.pvp)
+        wrapper.pvp = PVPS[wrapper.config.task_name](wrapper, wrapper.config.pattern_id)
+        wrapper.model = ContinuousPrompt(wrapper.config, wrapper.tokenizer, wrapper.pvp)
         wrapper.model.model = AutoModelForMaskedLM.from_pretrained(path)
 
         # Load prompt embeddings
@@ -178,11 +228,10 @@ class TransformerModelWrapper(object):
 
         # `inner` / `none` encoder
         if "prompt_embeddings" in data:
-            wrapper.model.prompt_embeddings.load_state_dict(
-                data["prompt_embeddings"])
+            wrapper.model.prompt_embeddings.load_state_dict(data["prompt_embeddings"])
 
         if "lstm_head" in data:
-            assert ("mlp_head" in data)
+            assert "mlp_head" in data
             wrapper.model.lstm_head.load_state_dict(data["lstm_head"])
             wrapper.model.mlp_head.load_state_dict(data["mlp_head"])
         if "mlp" in data:
@@ -190,14 +239,15 @@ class TransformerModelWrapper(object):
 
         if wrapper.config.prompt_encoder_type == "inner":
             wrapper.encoder = PromptEncoder(
-                wrapper.tokenizer, wrapper.pvp, wrapper.config.label_list)
+                wrapper.tokenizer, wrapper.pvp, wrapper.config.label_list
+            )
 
-        wrapper.label_map = {label: i for i,
-                             label in enumerate(wrapper.config.label_list)}
-        wrapper.task_helper = load_task_helper(
-            wrapper.config.task_name, wrapper)
+        wrapper.label_map = {
+            label: i for i, label in enumerate(wrapper.config.label_list)
+        }
+        wrapper.task_helper = load_task_helper(wrapper.config.task_name, wrapper)
 
-        if wrapper.config.device == 'cuda':
+        if wrapper.config.device == "cuda":
             if torch.cuda.device_count() > 1:
                 wrapper.model = torch.nn.DataParallel(wrapper.model)
             wrapper.model.cuda()
@@ -207,118 +257,201 @@ class TransformerModelWrapper(object):
         return wrapper
 
     def _save_config(self, path: str) -> None:
-        with open(os.path.join(path, CONFIG_NAME), 'w') as f:
+        with open(os.path.join(path, CONFIG_NAME), "w") as f:
             f.write(jsonpickle.encode(self.config))
 
     @staticmethod
     def _load_config(path: str) -> WrapperConfig:
-        with open(os.path.join(path, CONFIG_NAME), 'r') as f:
+        with open(os.path.join(path, CONFIG_NAME), "r") as f:
             return jsonpickle.decode(f.read())
 
-    def train(self,
-              train_data: List[InputExample],
-              eval_data: List[InputExample],
-              dev_data: List[InputExample],
-              eval_config: EvalConfig,
-              pattern_iter_output_dir,
-              per_gpu_train_batch_size: int = 8,
-              n_gpu: int = 1,
-              num_train_epochs: int = 3,
-              gradient_accumulation_steps: int = 1,
-              weight_decay: float = 0.0,
-              learning_rate: float = 5e-5,
-              adam_epsilon: float = 1e-8,
-              warmup_steps=0,
-              max_grad_norm: float = 1,
-              max_steps=-1,
-              early_stop_epochs=10,
-              **kwargs):
+    def train(
+        self,
+        train_data: List[InputExample],
+        eval_data: List[InputExample],
+        dev_data: List[InputExample],
+        eval_config: EvalConfig,
+        pattern_iter_output_dir,
+        per_gpu_train_batch_size: int = 8,
+        n_gpu: int = 1,
+        num_train_epochs: int = 3,
+        gradient_accumulation_steps: int = 1,
+        weight_decay: float = 0.0,
+        learning_rate: float = 5e-5,
+        adam_epsilon: float = 1e-8,
+        warmup_steps=0,
+        max_grad_norm: float = 1,
+        max_steps=-1,
+        early_stop_epochs=10,
+        **kwargs,
+    ):
+        """[summary]
+
+        Args:
+            train_data (List[InputExample]): [description]
+            eval_data (List[InputExample]): [description]
+            dev_data (List[InputExample]): [description]
+            eval_config (EvalConfig): [description]
+            pattern_iter_output_dir ([type]): Main output directory
+            per_gpu_train_batch_size (int, optional): [description]. Defaults to 8.
+            n_gpu (int, optional): [description]. Defaults to 1.
+            num_train_epochs (int, optional): Number of epochs . Defaults to 3.
+            gradient_accumulation_steps (int, optional): [description]. Defaults to 1.
+            weight_decay (float, optional): [description]. Defaults to 0.0.
+            learning_rate (float, optional): [description]. Defaults to 5e-5.
+            adam_epsilon (float, optional): [description]. Defaults to 1e-8.
+            warmup_steps (int, optional): [description]. Defaults to 0.
+            max_grad_norm (float, optional): [description]. Defaults to 1.
+            max_steps (int, optional): [description]. Defaults to -1.
+            early_stop_epochs (int, optional): [description]. Defaults to 10.
+        """
+
         def log_scalars(result_dict, set_type):
             # Write scalars with tensorboard
             for metric, score in result_dict.items():
-                writer.add_scalar(set_type + '-' + metric,
-                                  score, global_step=global_step)
-            if kwargs.get('wandb_log', False):
+                writer.add_scalar(
+                    set_type + "-" + metric, score, global_step=global_step
+                )
+            if kwargs.get("wandb_log", False):
                 # Write scalars with wandb
-                wandb.log({set_type + '-' + metric: score for metric,
-                           score in result_dict.items()})
+                wandb.log(
+                    {
+                        set_type + "-" + metric: score
+                        for metric, score in result_dict.items()
+                    }
+                )
 
         train_batch_size = per_gpu_train_batch_size * max(1, n_gpu)
         train_dataset = self._generate_dataset(train_data)
         train_sampler = RandomSampler(train_dataset)
         train_dataloader = DataLoader(
-            train_dataset, sampler=train_sampler, batch_size=train_batch_size)
+            train_dataset, sampler=train_sampler, batch_size=train_batch_size
+        )
 
-        if max_steps > 0:
+        if max_steps > 0:  # Can specify number of training steps instead of epochs
             t_total = max_steps
-            num_train_epochs = max_steps // (
-                max(1, len(train_dataloader) // gradient_accumulation_steps)) + 1
+            num_train_epochs = (
+                max_steps
+                // (max(1, len(train_dataloader) // gradient_accumulation_steps))
+                + 1
+            )
         else:
-            t_total = len(
-                train_dataloader) // gradient_accumulation_steps * num_train_epochs
+            t_total = (
+                len(train_dataloader) // gradient_accumulation_steps * num_train_epochs
+            )
 
-        cur_model = self.model.module if hasattr(
-            self.model, 'module') else self.model
+        cur_model = (
+            self.model.module if hasattr(self.model, "module") else self.model
+        )  # Why?
 
         # Prepare optimizer and schedule (linear warmup and decay)
-        no_decay = ['bias', 'LayerNorm.weight']
+        no_decay = ["bias", "LayerNorm.weight"]
+        # Store which parameters to add weight decay to (exclude bias and layernorm weights)
         optimizer_grouped_parameters = [
-            {'params': [p for n, p in cur_model.model.named_parameters() if not any(
-                nd in n for nd in no_decay)], 'weight_decay': weight_decay},
-            {'params': [p for n, p in cur_model.model.named_parameters() if any(
-                nd in n for nd in no_decay)], 'weight_decay': 0.0}
+            {
+                "params": [
+                    p
+                    for n, p in cur_model.model.named_parameters()
+                    if not any(nd in n for nd in no_decay)
+                ],
+                "weight_decay": weight_decay,
+            },
+            {
+                "params": [
+                    p
+                    for n, p in cur_model.model.named_parameters()
+                    if any(nd in n for nd in no_decay)
+                ],
+                "weight_decay": 0.0,
+            },
         ]
         embedding_parameters = None
-        stage = kwargs.get('stage', 0)
+        stage = kwargs.get("stage", 0)
 
         if self.config.prompt_encoder_type == "lstm":
             embedding_parameters = [
-                {'params': [p for p in cur_model.lstm_head.parameters()]},
-                {'params': [p for p in cur_model.mlp_head.parameters()]},
-                {'params': [p for p in cur_model.prompt_embeddings.parameters()]}
+                {"params": [p for p in cur_model.lstm_head.parameters()]},
+                {"params": [p for p in cur_model.mlp_head.parameters()]},
+                {"params": [p for p in cur_model.prompt_embeddings.parameters()]},
             ]
         elif self.config.prompt_encoder_type == "mlp":
             embedding_parameters = [
-                {'params': [p for p in cur_model.mlp.parameters()]},
-                {'params': [p for p in cur_model.prompt_embeddings.parameters()]}
+                {"params": [p for p in cur_model.mlp.parameters()]},
+                {"params": [p for p in cur_model.prompt_embeddings.parameters()]},
             ]
         elif self.config.prompt_encoder_type == "none":
             pass
         elif self.config.prompt_encoder_type == "inner":
             if stage == 1:
                 # Training stage 1: only optimize prompt-related tokens
-                handle = self.encoder.add_embed_hook(cur_model.model)
-                optimizer_grouped_parameters = [{'params': [p for p in cur_model.model.get_input_embeddings().parameters()],
-                                                 'weight_decay': 0.0}]
+                handle = self.encoder.add_embed_hook(
+                    cur_model.model
+                )  # Stage 1 set certain parameters with 0 weight decay
+                optimizer_grouped_parameters = [
+                    {
+                        "params": [
+                            p
+                            for p in cur_model.model.get_input_embeddings().parameters()
+                        ],
+                        "weight_decay": 0.0,
+                    }
+                ]
             else:
                 # Training stage 0 / 2: optimize all model weights with different learning rates
                 # This is used when training LM ONLY!
                 handle = self.encoder.add_reverse_hook((cur_model.model))
-                embedding_parameters = [{'params': [p for p in cur_model.model.get_input_embeddings().parameters()],
-                                         'weight_decay': 0.0}]
-                optimizer_grouped_parameters[0] = {'params': [p for n, p in cur_model.model.named_parameters()
-                                                              if not any(nd in n for nd in no_decay + ['word_embeddings'])],
-                                                   'weight_decay': weight_decay}
+                embedding_parameters = [
+                    {
+                        "params": [
+                            p
+                            for p in cur_model.model.get_input_embeddings().parameters()
+                        ],
+                        "weight_decay": 0.0,
+                    }
+                ]
+                optimizer_grouped_parameters[0] = {
+                    "params": [
+                        p
+                        for n, p in cur_model.model.named_parameters()
+                        if not any(nd in n for nd in no_decay + ["word_embeddings"])
+                    ],
+                    "weight_decay": weight_decay,
+                }
                 # Mask out gradients of tokens unrelated with prompt / label
-                if kwargs.get('fix_other_embeddings', False):
+                if kwargs.get("fix_other_embeddings", False):
                     handle = self.encoder.add_embed_hook(cur_model.model)
                     # embedding_parameters[0]['weight_decay'] = 0.0
         optimizer_list, scheduler_list = [], []
         optimizer_list.append(
-            AdamW(optimizer_grouped_parameters, lr=1e-5, eps=adam_epsilon))
-        scheduler_list.append(get_linear_schedule_with_warmup(
-            optimizer_list[0], num_warmup_steps=warmup_steps, num_training_steps=t_total))
+            AdamW(optimizer_grouped_parameters, lr=1e-5, eps=adam_epsilon)
+        )
+        scheduler_list.append(
+            get_linear_schedule_with_warmup(
+                optimizer_list[0],
+                num_warmup_steps=warmup_steps,
+                num_training_steps=t_total,
+            )
+        )
 
-        if embedding_parameters:
-            optimizer_list.append(AdamW(
-                embedding_parameters, lr=learning_rate, eps=adam_epsilon))
-            scheduler_list.append(get_linear_schedule_with_warmup(
-                optimizer_list[0], num_warmup_steps=warmup_steps, num_training_steps=t_total))
+        if (
+            embedding_parameters
+        ):  # Use separate optimizer and learning rate schedule to train the embedding parameters
+            optimizer_list.append(
+                AdamW(embedding_parameters, lr=learning_rate, eps=adam_epsilon)
+            )
+            scheduler_list.append(
+                get_linear_schedule_with_warmup(
+                    optimizer_list[0],
+                    num_warmup_steps=warmup_steps,
+                    num_training_steps=t_total,
+                )
+            )
 
         now = datetime.now()
-        path_suffix = now.strftime('%m-%d_%H:%M:%S') + 'stage_%d' % stage
-        writer = SummaryWriter(log_dir=os.path.join(
-            self.config.output_dir, "writer_logs", path_suffix))
+        path_suffix = now.strftime("%m-%d_%H:%M:%S") + "stage_%d" % stage
+        writer = SummaryWriter(
+            log_dir=os.path.join(self.config.output_dir, "writer_logs", path_suffix)
+        )
 
         # Statistics in training
         save_metric_name = load_metrics(self.config.task_name)[-1]
@@ -341,18 +474,21 @@ class TransformerModelWrapper(object):
         # log_scalars(eval_scores, 'eval')
 
         # PATCH @ 2021.09.27: Record evaluation results
-        if kwargs.get('record_eval', False):
+        if kwargs.get("record_eval", False):
             all_eval_dev, all_eval_test = [], []
 
-        extra_mask_rate = kwargs.get('extra_mask_rate', 0.0)
+        extra_mask_rate = kwargs.get("extra_mask_rate", 0.0)
         train_iterator = trange(int(num_train_epochs), desc="Epoch")
-        for _ in train_iterator:
-            for step, batch in enumerate(train_dataloader):
-                self.model.train()
+        for _ in train_iterator:  # iterate over epochs
+            for step, batch in enumerate(train_dataloader):  # iterate over batches
+                self.model.train()  # set model to training mode
+                # how is this being trained on the specific batch?
                 if extra_mask_rate > 0.0:
                     self._add_extra_mask(batch, extra_mask_rate)
-                if self.config.device == 'cuda':
-                    batch = {k: t.cuda() for k, t in batch.items()}
+                if self.config.device == "cuda":
+                    batch = {
+                        k: t.cuda() for k, t in batch.items()
+                    }  # move the batch data to GPU
 
                 # Casts operations to mixed precision
                 # with torch.cuda.amp.autocast():
@@ -367,7 +503,9 @@ class TransformerModelWrapper(object):
                     loss = self.mlm_train_step(batch)
 
                 if n_gpu > 1:
-                    loss = loss.mean()  # mean() to average on multi-gpu parallel training
+                    loss = (
+                        loss.mean()
+                    )  # mean() to average on multi-gpu parallel training
                 if gradient_accumulation_steps > 1:
                     loss = loss / gradient_accumulation_steps
 
@@ -377,7 +515,8 @@ class TransformerModelWrapper(object):
 
                 if (step + 1) % gradient_accumulation_steps == 0:
                     writer.add_scalar(
-                        "train_loss", (tr_loss - prev_loss), global_step=global_step)
+                        "train_loss", (tr_loss - prev_loss), global_step=global_step
+                    )
                     prev_loss = tr_loss
 
                     # Unscales the gradients of optimizer's assigned params in-place
@@ -385,7 +524,8 @@ class TransformerModelWrapper(object):
                     #     self.scaler.unscale_(optimizer)
 
                     torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), max_grad_norm)
+                        self.model.parameters(), max_grad_norm
+                    )
 
                     for optimizer, scheduler in zip(optimizer_list, scheduler_list):
                         optimizer.step()
@@ -399,21 +539,33 @@ class TransformerModelWrapper(object):
                     # Evaluate every some steps
                     if global_step % self.config.eval_every_step == 0:
                         dev_res = self.eval(
-                            dev_data, eval_config.per_gpu_eval_batch_size, n_gpu, eval_config.metrics)
-                        if kwargs.get('record_eval', False):
+                            dev_data,
+                            eval_config.per_gpu_eval_batch_size,
+                            n_gpu,
+                            eval_config.metrics,
+                        )
+                        if kwargs.get("record_eval", False):
                             all_eval_dev.append(dev_res)
-                        dev_scores = dev_res['scores']
-                        log_scalars(dev_scores, 'dev')
+                        dev_scores = dev_res["scores"]
+                        log_scalars(dev_scores, "dev")
                         # Evaluate sample and save model on best performance
                         if dev_scores[save_metric_name] >= best_dev_metric:
                             if dev_scores[save_metric_name] > best_dev_metric:
                                 early_stop_count = 0
-                                logger.info("Best %s on dev: %.4f | global step: %d" % (
-                                    save_metric_name, best_dev_metric, best_global_step))
+                                logger.info(
+                                    "Best %s on dev: %.4f | global step: %d"
+                                    % (
+                                        save_metric_name,
+                                        best_dev_metric,
+                                        best_global_step,
+                                    )
+                                )
                             else:
                                 early_stop_count += 1
-                                logger.info("Dev scores: %.4f | early_stop_count: %d" % (
-                                    dev_scores[save_metric_name], early_stop_count))
+                                logger.info(
+                                    "Dev scores: %.4f | early_stop_count: %d"
+                                    % (dev_scores[save_metric_name], early_stop_count)
+                                )
                             # Record best statistics
                             best_dev_metric = dev_scores[save_metric_name]
                             best_global_step = global_step
@@ -421,23 +573,28 @@ class TransformerModelWrapper(object):
 
                             # Perform evaluation on test
                             test_res = self.eval(
-                                eval_data, eval_config.per_gpu_eval_batch_size, n_gpu, eval_config.metrics)
-                            if kwargs.get('record_eval', False):
+                                eval_data,
+                                eval_config.per_gpu_eval_batch_size,
+                                n_gpu,
+                                eval_config.metrics,
+                            )
+                            if kwargs.get("record_eval", False):
                                 all_eval_test.append(test_res)
-                            eval_scores = test_res['scores']
-                            logger.info("eval_data performance: %s" %
-                                        str(eval_scores))
-                            log_scalars(eval_scores, 'eval')
+                            eval_scores = test_res["scores"]
+                            logger.info("eval_data performance: %s" % str(eval_scores))
+                            log_scalars(eval_scores, "eval")
 
                             # TODO: can also choose to save model only on higher scores
                             # Save best model
                             self.save(pattern_iter_output_dir)
                         else:
                             early_stop_count += 1
-                            if kwargs.get('record_eval', False):
+                            if kwargs.get("record_eval", False):
                                 all_eval_test.append(None)
-                            logger.info("Dev scores: %.4f | early_stop_count: %d" % (
-                                dev_scores[save_metric_name], early_stop_count))
+                            logger.info(
+                                "Dev scores: %.4f | early_stop_count: %d"
+                                % (dev_scores[save_metric_name], early_stop_count)
+                            )
 
                 if 0 < max_steps < global_step or early_stop_count >= early_stop_epochs:
                     break
@@ -451,21 +608,31 @@ class TransformerModelWrapper(object):
         except Exception:
             pass
 
-        if kwargs.get('record_eval', False):
-            return best_global_step, (best_loss / best_global_step if best_global_step > 0 else -1), all_eval_dev, all_eval_test
-        return best_global_step, (best_loss / best_global_step if best_global_step > 0 else -1)
+        if kwargs.get("record_eval", False):
+            return (
+                best_global_step,
+                (best_loss / best_global_step if best_global_step > 0 else -1),
+                all_eval_dev,
+                all_eval_test,
+            )
+        return best_global_step, (
+            best_loss / best_global_step if best_global_step > 0 else -1
+        )
 
-    def eval(self,
-             eval_data: List[InputExample],
-             per_gpu_eval_batch_size: int = 8,
-             n_gpu: int = 1,
-             metrics: List[str] = ['acc']) -> Dict:
+    def eval(
+        self,
+        eval_data: List[InputExample],
+        per_gpu_eval_batch_size: int = 8,
+        n_gpu: int = 1,
+        metrics: List[str] = ["acc"],
+    ) -> Dict:
 
         eval_dataset = self._generate_dataset(eval_data)
         eval_batch_size = per_gpu_eval_batch_size * max(1, n_gpu)
         eval_sampler = SequentialSampler(eval_dataset)
         eval_dataloader = DataLoader(
-            eval_dataset, sampler=eval_sampler, batch_size=eval_batch_size)
+            eval_dataset, sampler=eval_sampler, batch_size=eval_batch_size
+        )
 
         preds = None
         all_indices, out_label_ids, question_ids = None, None, None
@@ -474,81 +641,109 @@ class TransformerModelWrapper(object):
 
         for batch in tqdm(eval_dataloader, desc="Evaluating"):
             self.model.eval()
-            if self.config.device == 'cuda':
+            if self.config.device == "cuda":
                 batch = {k: t.cuda() for k, t in batch.items()}
-            labels = batch['labels']
-            indices = batch['idx']
+            labels = batch["labels"]
+            indices = batch["idx"]
 
             with torch.no_grad():
-                logits = self.task_helper.eval_step(
-                    batch) if self.task_helper else None
+                logits = self.task_helper.eval_step(batch) if self.task_helper else None
                 if logits is None:
                     # PATCH @ 2021.09.27: add masked hidden states of each sentence
-                    logits, masked_full_logits, masked_hidden_states = self.mlm_eval_step(
-                        batch)
+                    (
+                        logits,
+                        masked_full_logits,
+                        masked_hidden_states,
+                    ) = self.mlm_eval_step(batch)
                     if all_masked_hidden_states is None:
-                        all_masked_full_logits = masked_full_logits.detach().cpu().numpy()
-                        all_masked_hidden_states = masked_hidden_states.detach().cpu().numpy()
+                        all_masked_full_logits = (
+                            masked_full_logits.detach().cpu().numpy()
+                        )
+                        all_masked_hidden_states = (
+                            masked_hidden_states.detach().cpu().numpy()
+                        )
                     else:
                         all_masked_full_logits = np.append(
-                            all_masked_full_logits, masked_full_logits.detach().cpu().numpy(), axis=0)
+                            all_masked_full_logits,
+                            masked_full_logits.detach().cpu().numpy(),
+                            axis=0,
+                        )
                         all_masked_hidden_states = np.append(
-                            all_masked_hidden_states, masked_hidden_states.detach().cpu().numpy(), axis=0)
+                            all_masked_hidden_states,
+                            masked_hidden_states.detach().cpu().numpy(),
+                            axis=0,
+                        )
 
                 prediction_scores = logits.float()
                 eval_loss = nn.CrossEntropyLoss()(
-                    prediction_scores.view(-1, len(self.config.label_list)), labels.view(-1))
+                    prediction_scores.view(-1, len(self.config.label_list)),
+                    labels.view(-1),
+                )
                 eval_losses.append(eval_loss.item())
 
             if preds is None:
                 preds = logits.detach().cpu().numpy()
                 out_label_ids = labels.detach().cpu().numpy()
                 all_indices = indices.detach().cpu().numpy()
-                if 'question_idx' in batch:
-                    question_ids = batch['question_idx'].detach().cpu().numpy()
+                if "question_idx" in batch:
+                    question_ids = batch["question_idx"].detach().cpu().numpy()
             else:
                 preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
                 out_label_ids = np.append(
-                    out_label_ids, labels.detach().cpu().numpy(), axis=0)
+                    out_label_ids, labels.detach().cpu().numpy(), axis=0
+                )
                 all_indices = np.append(
-                    all_indices, indices.detach().cpu().numpy(), axis=0)
-                if 'question_idx' in batch:
+                    all_indices, indices.detach().cpu().numpy(), axis=0
+                )
+                if "question_idx" in batch:
                     question_ids = np.append(
-                        question_ids, batch['question_idx'].detach().cpu().numpy(), axis=0)
+                        question_ids,
+                        batch["question_idx"].detach().cpu().numpy(),
+                        axis=0,
+                    )
 
         results = {
             "eval_loss": np.mean(eval_losses),
-            'indices': all_indices,
-            'logits': preds,
-            'labels': out_label_ids,
-            'question_ids': question_ids,
-            'full_logits': all_masked_full_logits,
-            'masked_hidden_states': all_masked_hidden_states
+            "indices": all_indices,
+            "logits": preds,
+            "labels": out_label_ids,
+            "question_ids": question_ids,
+            "full_logits": all_masked_full_logits,
+            "masked_hidden_states": all_masked_hidden_states,
         }
 
         return evaluate_results(results, metrics)
 
     def mlm_train_step(self, labeled_batch: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """Perform a MLM training step."""
-        inputs = self._generate_default_inputs(labeled_batch)
-        mlm_labels, labels = labeled_batch['mlm_labels'], labeled_batch['labels']
-        model = self.model.module if hasattr(
-            self.model, 'module') else self.model
-        outputs = model.model(**inputs)
+        """Main Training Step of Model"""
+        inputs = self._generate_default_inputs(
+            labeled_batch
+        )  # some additional preprocessing on batch
+        mlm_labels, labels = labeled_batch["mlm_labels"], labeled_batch["labels"]
+        model = self.model.module if hasattr(self.model, "module") else self.model
+        outputs = model.model(**inputs)  # run model on inputs
+
+        # Post processing steps
         if self.config.prompt_encoder_type == "inner":
             prediction_scores = self.encoder.convert_mlm_logits_to_cls_logits(
-                mlm_labels, outputs[0])
+                mlm_labels, outputs[0]
+            )
         else:
             prediction_scores = self.pvp.convert_mlm_logits_to_cls_logits(
-                mlm_labels, outputs[0])
+                mlm_labels, outputs[0]
+            )
+        # actually calculate loss
         loss = nn.CrossEntropyLoss()(
-            prediction_scores.view(-1, len(self.config.label_list)), labels.view(-1))
+            prediction_scores.view(-1, len(self.config.label_list)), labels.view(-1)
+        )
 
-        # Add loss of extra masked tokens
-        if 'extra_mlm_labels' in labeled_batch:
-            extra_mlm_labels = labeled_batch['extra_mlm_labels']
-            extra_loss = nn.CrossEntropyLoss()(outputs[0].view(-1, self.tokenizer.vocab_size),
-                                               extra_mlm_labels.view(-1))
+        # Add loss of extra masked tokens -> what is this?
+        if "extra_mlm_labels" in labeled_batch:
+            extra_mlm_labels = labeled_batch["extra_mlm_labels"]
+            extra_loss = nn.CrossEntropyLoss()(
+                outputs[0].view(-1, self.tokenizer.vocab_size),
+                extra_mlm_labels.view(-1),
+            )
             loss += extra_loss
 
         return loss
@@ -556,32 +751,63 @@ class TransformerModelWrapper(object):
     def mlm_eval_step(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         """Perform a MLM evaluation step."""
         inputs = self._generate_default_inputs(batch)
-        model = self.model.module if hasattr(
-            self.model, 'module') else self.model
+        model = self.model.module if hasattr(self.model, "module") else self.model
         # PATCH @ 2021.09.27: add masked hidden states of each sentence
         outputs = model.model(**inputs, output_hidden_states=True)
 
         # Get outputs of encoder in last layer
-        masked_full_logits = outputs[0][batch['mlm_labels'] >= 0]
-        masked_hidden_states = outputs[1][-1][batch['mlm_labels'] >= 0]
+        masked_full_logits = outputs[0][batch["mlm_labels"] >= 0]
+        masked_hidden_states = outputs[1][-1][batch["mlm_labels"] >= 0]
 
         if self.config.prompt_encoder_type == "inner":
-            return self.encoder.convert_mlm_logits_to_cls_logits(batch['mlm_labels'], outputs[0]), masked_full_logits, masked_hidden_states
+            return (
+                self.encoder.convert_mlm_logits_to_cls_logits(
+                    batch["mlm_labels"], outputs[0]
+                ),
+                masked_full_logits,
+                masked_hidden_states,
+            )
 
-        return self.pvp.convert_mlm_logits_to_cls_logits(batch['mlm_labels'], outputs[0]), masked_full_logits, masked_hidden_states
+        return (
+            self.pvp.convert_mlm_logits_to_cls_logits(batch["mlm_labels"], outputs[0]),
+            masked_full_logits,
+            masked_hidden_states,
+        )
 
     def _generate_dataset(self, data: List[InputExample], labelled: bool = True):
+        """Generate dataset
+
+        Args:
+            data (List[InputExample]): [description]
+            labelled (bool, optional): [description]. Defaults to True.
+
+        Returns:
+            [type]: [description]
+        """
         features = self._convert_examples_to_features(data, labelled=labelled)
         # Convert list features to tensors
+        # Huggingface format
         feature_dict = {
-            'input_ids': torch.tensor([f.input_ids for f in features], dtype=torch.long),
-            'attention_mask': torch.tensor([f.attention_mask for f in features], dtype=torch.long),
-            'token_type_ids': torch.tensor([f.token_type_ids for f in features], dtype=torch.long),
-            'labels': torch.tensor([f.label for f in features], dtype=torch.long),
-            'mlm_labels': torch.tensor([f.mlm_labels for f in features], dtype=torch.long),
-            'logits': torch.tensor([f.logits for f in features], dtype=torch.float),
-            'idx': torch.tensor([f.idx for f in features], dtype=torch.long),
-            'block_flag': torch.tensor([f.block_flag for f in features], dtype=torch.long)
+            "input_ids": torch.tensor(  # input text ids
+                [f.input_ids for f in features], dtype=torch.long
+            ),
+            "attention_mask": torch.tensor(
+                [f.attention_mask for f in features], dtype=torch.long
+            ),
+            "token_type_ids": torch.tensor(  # sent 1, sent 2 etc - relatively important for entialment
+                [f.token_type_ids for f in features], dtype=torch.long
+            ),
+            "labels": torch.tensor(
+                [f.label for f in features], dtype=torch.long
+            ),  # what is the difference between labels and mlm labels
+            "mlm_labels": torch.tensor(
+                [f.mlm_labels for f in features], dtype=torch.long
+            ),
+            "logits": torch.tensor([f.logits for f in features], dtype=torch.float),
+            "idx": torch.tensor([f.idx for f in features], dtype=torch.long),
+            "block_flag": torch.tensor(
+                [f.block_flag for f in features], dtype=torch.long
+            ),
         }
 
         if self.task_helper:
@@ -589,23 +815,44 @@ class TransformerModelWrapper(object):
 
         return DictDataset(**feature_dict)
 
-    def _convert_examples_to_features(self, examples: List[InputExample], labelled: bool = True) -> List[InputFeatures]:
+    def _convert_examples_to_features(
+        self, examples: List[InputExample], labelled: bool = True
+    ) -> List[InputFeatures]:
+        """Convert list of input examples to list of input features
+
+        Args:
+            examples (List[InputExample]): [description]
+            labelled (bool, optional): [description]. Defaults to True.
+
+        Raises:
+            ValueError: [description]
+
+        Returns:
+            List[InputFeatures]: [description]
+        """
         features = []
         for example in examples:
             # Preprocessor for models pretrained using a masked language modeling objective (e.g., BERT).
-            input_ids, token_type_ids, block_flag = self.pvp.encode(example)
-            attention_mask = [1] * len(input_ids)
-            padding_length = self.config.max_seq_length - \
-                len(input_ids)
+            input_ids, token_type_ids, block_flag = self.pvp.encode(
+                example
+            )  # processing is based on PVP encode method
+            attention_mask = [1] * len(
+                input_ids
+            )  # always use fully visible attention max
+            padding_length = self.config.max_seq_length - len(
+                input_ids
+            )  # length to pad to
 
             if padding_length < 0:
                 raise ValueError(
-                    f"Maximum sequence length is too small, got {len(input_ids)} input ids")
+                    f"Maximum sequence length is too small, got {len(input_ids)} input ids"
+                )
 
-            input_ids = input_ids + \
-                ([self.tokenizer.pad_token_id] * padding_length)
-            attention_mask = attention_mask + ([0] * padding_length)
-            token_type_ids = token_type_ids + ([0] * padding_length)
+            input_ids = input_ids + (
+                [self.tokenizer.pad_token_id] * padding_length
+            )  # manually sequence
+            attention_mask = attention_mask + ([0] * padding_length)  # mask padded part
+            token_type_ids = token_type_ids + ([0] * padding_length)  # mask padded part
             block_flag = block_flag + ([0] * padding_length)
 
             assert len(input_ids) == self.config.max_seq_length
@@ -621,47 +868,73 @@ class TransformerModelWrapper(object):
             else:
                 mlm_labels = [-1] * self.config.max_seq_length
 
-            input_features = InputFeatures(input_ids=input_ids,
-                                           attention_mask=attention_mask,
-                                           token_type_ids=token_type_ids,
-                                           label=label,
-                                           mlm_labels=mlm_labels,
-                                           logits=logits,
-                                           idx=example.idx,
-                                           block_flag=block_flag)
+            input_features = InputFeatures(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                label=label,
+                mlm_labels=mlm_labels,
+                logits=logits,
+                idx=example.idx,
+                block_flag=block_flag,
+            )
 
             # Add meta input features
             if self.task_helper:
-                self.task_helper.add_special_input_features(
-                    example, input_features)
+                self.task_helper.add_special_input_features(example, input_features)
             features.append(input_features)
 
         return features
 
-    def _generate_default_inputs(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        input_ids = batch['input_ids']
-        bz = batch['input_ids'].shape[0]
-        block_flag = batch["block_flag"]
-        model = self.model.module if hasattr(
-            self.model, 'module') else self.model
+    def _generate_default_inputs(
+        self, batch: Dict[str, torch.Tensor]
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Turn dataset batch into labels for model
 
-        word_embeddings = model.model.get_input_embeddings()
+        Args:
+            batch (Dict[str, torch.Tensor]): [description]
+
+        Raises:
+            ValueError: [description]
+
+        Returns:
+            Dict[str, torch.Tensor]: [description]
+        """
+        input_ids = batch["input_ids"]
+        bz = batch["input_ids"].shape[0]
+        block_flag = batch["block_flag"]
+        model = self.model.module if hasattr(self.model, "module") else self.model
+
+        word_embeddings = (
+            model.model.get_input_embeddings()
+        )  # models method of getting word embeddings
         raw_embeds = word_embeddings(input_ids)
 
         replace_embeds = model.prompt_embeddings(
-            torch.LongTensor(list(range(model.prompt_length))).to(raw_embeds.device))
+            torch.LongTensor(list(range(model.prompt_length))).to(raw_embeds.device)
+        )
         # [batch_size, prompt_length, embed_size]
         replace_embeds = replace_embeds.unsqueeze(0)
 
         if self.config.prompt_encoder_type == "lstm":
             # [batch_size, seq_len, 2 * hidden_dim]
-            replace_embeds = model.lstm_head(replace_embeds)[0]
+            replace_embeds = model.lstm_head(replace_embeds)[
+                0
+            ]  # use LSTM over sequence of raw embeddings
+            # use hidden states from LSTM was new embeddings
             if model.prompt_length == 1:
-                replace_embeds = model.mlp_head(replace_embeds)
+                replace_embeds = model.mlp_head(
+                    replace_embeds
+                )  # additional processing of LSTM hidden states
             else:
-                replace_embeds = model.mlp_head(replace_embeds).squeeze()
+                replace_embeds = model.mlp_head(
+                    replace_embeds
+                ).squeeze()  # get rid of batch dimension
 
-        elif self.config.prompt_encoder_type == "mlp":
+        elif (
+            self.config.prompt_encoder_type == "mlp"
+        ):  # Feed through MLP to get new embeddings
             replace_embeds = model.mlp(replace_embeds)
 
         elif self.config.prompt_encoder_type == "none":
@@ -674,30 +947,40 @@ class TransformerModelWrapper(object):
         else:
             raise ValueError("unknown prompt_encoder_type.")
 
-        if replace_embeds is not None:  # For normal cases where prompt encoder is not None
-            blocked_indices = (block_flag == 1).nonzero(as_tuple=False).reshape(
-                (bz, model.prompt_length, 2))[:, :, 1]
+        if (
+            replace_embeds is not None
+        ):  # For normal cases where prompt encoder is not None
+            blocked_indices = (
+                (block_flag == 1)
+                .nonzero(as_tuple=False)
+                .reshape((bz, model.prompt_length, 2))[:, :, 1]
+            )
 
             for bidx in range(bz):
                 for i in range(blocked_indices.shape[1]):
-                    raw_embeds[bidx, blocked_indices[bidx, i],
-                               :] = replace_embeds[i, :]
+                    raw_embeds[bidx, blocked_indices[bidx, i], :] = replace_embeds[i, :]
+            # replace certain raw_embeds with repalce inputs
 
-        inputs = {'inputs_embeds': raw_embeds,
-                  'attention_mask': batch['attention_mask']}
+        inputs = {
+            "inputs_embeds": raw_embeds,
+            "attention_mask": batch["attention_mask"],
+        }
 
-        if self.config.model_type in ['bert']:
-            inputs['token_type_ids'] = batch['token_type_ids']
+        if self.config.model_type in [
+            "bert"
+        ]:  # not relevant for ROBERTa due to no NSP?
+            inputs["token_type_ids"] = batch["token_type_ids"]
 
         return inputs
 
     def _add_extra_mask(self, batch: Dict[str, torch.Tensor], mask_rate: float) -> None:
-        input_ids = batch['input_ids']
-        block_flag = batch['block_flag']
+        input_ids = batch["input_ids"]
+        block_flag = batch["block_flag"]
         tokenizer = self.tokenizer
         mask_id, pad_id = tokenizer.mask_token_id, tokenizer.pad_token_id
-        special_token_id_set = set(tokenizer.convert_tokens_to_ids(
-            tokenizer.special_tokens_map.values()))
+        special_token_id_set = set(
+            tokenizer.convert_tokens_to_ids(tokenizer.special_tokens_map.values())
+        )
         extra_mlm_labels = torch.ones_like(input_ids, dtype=torch.long) * -100
         for idx in range(len(input_ids)):
             maskable_pos = []
@@ -708,10 +991,9 @@ class TransformerModelWrapper(object):
                     if block_flag[idx][pos] == 0:
                         maskable_pos.append(pos)
             mask_count = int(len(maskable_pos) * mask_rate)
-            mask_pos = np.random.choice(
-                maskable_pos, mask_count, replace=False)
+            mask_pos = np.random.choice(maskable_pos, mask_count, replace=False)
             for pos in mask_pos:
                 extra_mlm_labels[idx][pos] = input_ids[idx][pos]
                 input_ids[idx][pos] = mask_id
 
-        batch['extra_mlm_labels'] = extra_mlm_labels
+        batch["extra_mlm_labels"] = extra_mlm_labels
