@@ -27,18 +27,24 @@ class PromptEncoder(object):
         kwargs = (
             {"add_prefix_space": True} if isinstance(tokenizer, GPT2Tokenizer) else {}
         )
-        for idx, part in enumerate(pvp.PATTERN):  # Iterate over patter
-            if pvp.BLOCK_FLAG[idx] == 1:
+        for idx, part in enumerate(
+            pvp.PATTERN
+        ):  # Iterate over pattern - looks like only one pseodutoken is used per nonzero block flag
+            if (
+                pvp.BLOCK_FLAG[idx] == 1
+            ):  # if block flag is equal to 1 (corresponding to "the" in the pattern)
                 token_ids = tokenizer.encode(
                     part, add_special_tokens=False, **kwargs
-                )  # get token ids
+                )  # get token ids # encode "the" with the tokenizer
                 pattern_token_set.update(token_ids)  # add to dictionary
                 pattern_token_indices.extend(token_ids)
 
         # Record label tokens - all verbalizer ids for all label
-        label_token_ids = []
+        label_token_ids = []  # start ids of verbalizer tokens
         for label_idx, label in enumerate(label_list):  # iterate over list of labels
-            verbalizers = pvp.verbalize(label)  # verbalizers (more than 1? Yes)
+            verbalizers = pvp.verbalize(
+                label
+            )  # verbalizers (more than 1? Yes, but only one used in most PVP templates)
             for verbalizer_idx, verbalizer in enumerate(verbalizers):
                 verbalizer_id = get_verbalization_ids(
                     verbalizer, tokenizer, force_single_token=True
@@ -48,7 +54,9 @@ class PromptEncoder(object):
                 ), "verbalization was tokenized as <UNK>"
                 label_token_ids.append(verbalizer_id)
 
-        assert len(pattern_token_set) < 50 and len(label_token_ids) < 49  # ?
+        assert (
+            len(pattern_token_set) < 50 and len(label_token_ids) < 49
+        )  # Can't have more than 50 classes or 50 trainable pseudotokens
 
         # Convert tokens in manual prompt / label to unused tokens
         # Note that `AlbertTokenizer` or `RobertaTokenizer` doesn't have a `vocab` attribute

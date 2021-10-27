@@ -25,16 +25,19 @@ from transformers import PreTrainedTokenizer, GPT2Tokenizer
 
 from utils import InputExample, get_verbalization_ids
 
-logger = logging.getLogger('pvps')
+logger = logging.getLogger("pvps")
 
-FilledPattern = Tuple[List[Union[str, Tuple[str, bool]]],
-                      List[Union[str, Tuple[str, bool]]]]
+FilledPattern = Tuple[
+    List[Union[str, Tuple[str, bool]]], List[Union[str, Tuple[str, bool]]]
+]
 
 
 class PVP(ABC):
     """
     This class contains functions to apply patterns and verbalizers as required by PET. Each task requires its own
     custom implementation of a PVP.
+
+    Pattern Verbalizer Pair
     """
 
     def __init__(self, wrapper, pattern_id: int = 0, seed: int = 42):
@@ -45,8 +48,8 @@ class PVP(ABC):
         :param verbalizer_file: an optional file that contains the verbalizer to be used
         :param seed: a seed to be used for generating random numbers if necessary
         """
-        self.wrapper = wrapper
-        self.pattern_id = pattern_id
+        self.wrapper = wrapper  # Our wrapped Roberta model
+        self.pattern_id = pattern_id  # ID (to read from config file?)
         self.rng = random.Random(seed)
 
         """
@@ -57,19 +60,26 @@ class PVP(ABC):
         # from pet import wrapper as wrp
         # if self.wrapper.config.wrapper_type in [wrp.MLM_WRAPPER, wrp.PLM_WRAPPER]:
 
-        self.mlm_logits_to_cls_logits_tensor = self._build_mlm_logits_to_cls_logits_tensor()
+        self.mlm_logits_to_cls_logits_tensor = (
+            self._build_mlm_logits_to_cls_logits_tensor()
+        )
 
     def _build_mlm_logits_to_cls_logits_tensor(self):
         label_list = self.wrapper.config.label_list
-        m2c_tensor = torch.ones(
-            [len(label_list), self.max_num_verbalizers], dtype=torch.long) * -1
+        m2c_tensor = (
+            torch.ones([len(label_list), self.max_num_verbalizers], dtype=torch.long)
+            * -1
+        )
 
         for label_idx, label in enumerate(label_list):
             verbalizers = self.verbalize(label)
             for verbalizer_idx, verbalizer in enumerate(verbalizers):
                 verbalizer_id = get_verbalization_ids(
-                    verbalizer, self.wrapper.tokenizer, force_single_token=True)
-                assert verbalizer_id != self.wrapper.tokenizer.unk_token_id, "verbalization was tokenized as <UNK>"
+                    verbalizer, self.wrapper.tokenizer, force_single_token=True
+                )
+                assert (
+                    verbalizer_id != self.wrapper.tokenizer.unk_token_id
+                ), "verbalization was tokenized as <UNK>"
                 m2c_tensor[label_idx, verbalizer_idx] = verbalizer_id
         return m2c_tensor
 
@@ -86,7 +96,9 @@ class PVP(ABC):
     @property
     def max_num_verbalizers(self) -> int:
         """Return the maximum number of verbalizers across all labels"""
-        return max(len(self.verbalize(label)) for label in self.wrapper.config.label_list)
+        return max(
+            len(self.verbalize(label)) for label in self.wrapper.config.label_list
+        )
 
     @staticmethod
     def shortenable(s):
@@ -97,7 +109,7 @@ class PVP(ABC):
     def remove_final_punc(s: Union[str, Tuple[str, bool]]):
         """Remove the final punctuation mark"""
         if isinstance(s, tuple):
-            return PVP.remove_final_punc(s[0]), s[1]
+            return PVP.remove_final_punc(s[0]), s[1]  # ABC call
         return s.rstrip(string.punctuation)
 
     @staticmethod
@@ -107,8 +119,9 @@ class PVP(ABC):
             return PVP.lowercase_first(s[0]), s[1]
         return s[0].lower() + s[1:]
 
-    def encode(self, example: InputExample, priming: bool = False, labeled: bool = False) \
-            -> Tuple[List[int], List[int]]:
+    def encode(
+        self, example: InputExample, priming: bool = False, labeled: bool = False
+    ) -> Tuple[List[int], List[int]]:
         """
         Encode an input example using this pattern-verbalizer pair.
 
@@ -118,88 +131,127 @@ class PVP(ABC):
         :return: A tuple, consisting of a list of input ids and a list of token type ids
         """
 
-        tokenizer = self.wrapper.tokenizer  # type: PreTrainedTokenizer
+        tokenizer = (
+            self.wrapper.tokenizer
+        )  # type: PreTrainedTokenizer # use tokenizer from the wrapped model
 
-        parts_a, parts_b, block_flag_a, block_flag_b = self.get_parts(example)
+        parts_a, parts_b, block_flag_a, block_flag_b = self.get_parts(
+            example
+        )  # block flag indicates position of the tokens, block_flag_b is mostly empty
 
-        kwargs = {'add_prefix_space': True} if isinstance(
-            tokenizer, GPT2Tokenizer) else {}
+        kwargs = (
+            {"add_prefix_space": True} if isinstance(tokenizer, GPT2Tokenizer) else {}
+        )  # Use this tokenizer
 
-        parts_a = [x if isinstance(x, tuple) else (x, False) for x in parts_a]
-        parts_a = [(tokenizer.encode(x, add_special_tokens=False, **kwargs), s)
-                   for x, s in parts_a if x]
+        parts_a = [
+            x if isinstance(x, tuple) else (x, False) for x in parts_a
+        ]  # What does the boolean in the second part of the tuple represent?
+        parts_a = [
+            (tokenizer.encode(x, add_special_tokens=False, **kwargs), s)
+            for x, s in parts_a
+            if x
+        ]  # tokenize the input sequence
 
         if parts_b:
-            parts_b = [x if isinstance(x, tuple) else (x, False)
-                       for x in parts_b]
-            parts_b = [(tokenizer.encode(x, add_special_tokens=False, **kwargs), s)
-                       for x, s in parts_b if x]
+            parts_b = [x if isinstance(x, tuple) else (x, False) for x in parts_b]
+            parts_b = [
+                (tokenizer.encode(x, add_special_tokens=False, **kwargs), s)
+                for x, s in parts_b
+                if x
+            ]
 
         # self.truncate(parts_a, parts_b, max_length=self.wrapper.config.max_seq_length)
-        num_special = self.wrapper.tokenizer.num_special_tokens_to_add(
-            bool(parts_b))
+        num_special = self.wrapper.tokenizer.num_special_tokens_to_add(bool(parts_b))
         self.truncate(
-            parts_a, parts_b, max_length=self.wrapper.config.max_seq_length - num_special)
+            parts_a,
+            parts_b,
+            max_length=self.wrapper.config.max_seq_length - num_special,
+        )
 
         tokens_a = [token_id for part, _ in parts_a for token_id in part]
         # tokens_b = [token_id for part, _ in parts_b for token_id in part] if parts_b else None
-        tokens_b = [token_id for part,
-                    _ in parts_b for token_id in part] if parts_b else []
+        tokens_b = (
+            [token_id for part, _ in parts_b for token_id in part] if parts_b else []
+        )
 
         # add
         assert len(parts_a) == len(block_flag_a)
         assert len(parts_b) == len(block_flag_b)
 
-        block_flag_a = [flag for (part, _), flag in zip(
-            parts_a, block_flag_a) for _ in part]
-        block_flag_b = [flag for (part, _), flag in zip(
-            parts_b, block_flag_b) for _ in part]
+        block_flag_a = [
+            flag for (part, _), flag in zip(parts_a, block_flag_a) for _ in part
+        ]
+        block_flag_b = [
+            flag for (part, _), flag in zip(parts_b, block_flag_b) for _ in part
+        ]
 
         assert len(tokens_a) == len(block_flag_a)
         assert len(tokens_b) == len(block_flag_b)
 
         if tokens_b:
-            input_ids = tokenizer.build_inputs_with_special_tokens(
-                tokens_a, tokens_b)
+            input_ids = tokenizer.build_inputs_with_special_tokens(tokens_a, tokens_b)
             token_type_ids = tokenizer.create_token_type_ids_from_sequences(
-                tokens_a, tokens_b)
+                tokens_a, tokens_b
+            )
             block_flag = tokenizer.build_inputs_with_special_tokens(
-                block_flag_a, block_flag_b)
+                block_flag_a, block_flag_b
+            )
         else:
             input_ids = tokenizer.build_inputs_with_special_tokens(tokens_a)
-            token_type_ids = tokenizer.create_token_type_ids_from_sequences(
-                tokens_a)
-            block_flag = tokenizer.build_inputs_with_special_tokens(
-                block_flag_a)
+            token_type_ids = tokenizer.create_token_type_ids_from_sequences(tokens_a)
+            block_flag = tokenizer.build_inputs_with_special_tokens(block_flag_a)
 
-        block_flag = [item if item in [0, 1] else 0 for item in block_flag]
+        block_flag = [
+            item if item in [0, 1] else 0 for item in block_flag
+        ]  # still sequence of 1s and zeros
         assert len(input_ids) == len(block_flag)
 
         # return input_ids, token_type_ids
-        return input_ids, token_type_ids, block_flag
+        return (
+            input_ids,
+            token_type_ids,
+            block_flag,
+        )  # encoded input, input token types, boolean mask
 
     @staticmethod
     def _seq_length(parts: List[Tuple[str, bool]], only_shortenable: bool = False):
-        return sum([len(x) for x, shortenable in parts if not only_shortenable or shortenable]) if parts else 0
+        return (
+            sum(
+                [
+                    len(x)
+                    for x, shortenable in parts
+                    if not only_shortenable or shortenable
+                ]
+            )
+            if parts
+            else 0
+        )
 
     @staticmethod
     def _remove_last(parts: List[Tuple[str, bool]]):
-        last_idx = max(idx for idx, (seq, shortenable)
-                       in enumerate(parts) if shortenable and seq)
+        last_idx = max(
+            idx for idx, (seq, shortenable) in enumerate(parts) if shortenable and seq
+        )
         parts[last_idx] = (parts[last_idx][0][:-1], parts[last_idx][1])
 
-    def truncate(self, parts_a: List[Tuple[str, bool]], parts_b: List[Tuple[str, bool]], max_length: int):
+    def truncate(
+        self,
+        parts_a: List[Tuple[str, bool]],
+        parts_b: List[Tuple[str, bool]],
+        max_length: int,
+    ):
         """Truncate two sequences of text to a predefined total maximum length"""
         total_len = self._seq_length(parts_a) + self._seq_length(parts_b)
-        total_len += self.wrapper.tokenizer.num_special_tokens_to_add(
-            bool(parts_b))
+        total_len += self.wrapper.tokenizer.num_special_tokens_to_add(bool(parts_b))
         num_tokens_to_remove = total_len - max_length
 
         if num_tokens_to_remove <= 0:
             return parts_a, parts_b
 
         for _ in range(num_tokens_to_remove):
-            if self._seq_length(parts_a, only_shortenable=True) > self._seq_length(parts_b, only_shortenable=True):
+            if self._seq_length(parts_a, only_shortenable=True) > self._seq_length(
+                parts_b, only_shortenable=True
+            ):
                 self._remove_last(parts_a)
             else:
                 self._remove_last(parts_b)
@@ -210,6 +262,8 @@ class PVP(ABC):
         Given an input example, apply a pattern to obtain two text sequences (text_a and text_b) containing exactly one
         mask token (or one consecutive sequence of mask tokens for PET with multiple masks). If a task requires only a
         single sequence of text, the second sequence should be an empty list.
+
+        ex: entailment? sent1, sent2 -> test_a,[mask] test_b
 
         :param example: the input example to process
         :return: Two sequences of text. All text segments can optionally be marked as being shortenable.
@@ -224,7 +278,7 @@ class PVP(ABC):
         :param label: the label
         :return: the list of verbalizations
         """
-        if hasattr(cls, 'VERBALIZER'):
+        if hasattr(cls, "VERBALIZER"):
             return cls.VERBALIZER[label]
         return []
 
@@ -234,17 +288,24 @@ class PVP(ABC):
         labels[label_idx] = 1
         return labels
 
-    def convert_mlm_logits_to_cls_logits(self, mlm_labels: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+    def convert_mlm_logits_to_cls_logits(
+        self, mlm_labels: torch.Tensor, logits: torch.Tensor
+    ) -> torch.Tensor:
         masked_logits = logits[mlm_labels >= 0]
         cls_logits = torch.stack(
-            [self._convert_single_mlm_logits_to_cls_logits(ml) for ml in masked_logits])
+            [self._convert_single_mlm_logits_to_cls_logits(ml) for ml in masked_logits]
+        )
         return cls_logits
 
-    def _convert_single_mlm_logits_to_cls_logits(self, logits: torch.Tensor) -> torch.Tensor:
+    def _convert_single_mlm_logits_to_cls_logits(
+        self, logits: torch.Tensor
+    ) -> torch.Tensor:
         m2c = self.mlm_logits_to_cls_logits_tensor.to(logits.device)
         # filler_len.shape() == max_fillers
-        filler_len = torch.tensor([len(self.verbalize(label)) for label in self.wrapper.config.label_list],
-                                  dtype=torch.float)
+        filler_len = torch.tensor(
+            [len(self.verbalize(label)) for label in self.wrapper.config.label_list],
+            dtype=torch.float,
+        )
         filler_len = filler_len.to(logits.device)
 
         # cls_logits.shape() == num_labels x max_fillers  (and 0 when there are not as many fillers).
@@ -260,7 +321,8 @@ class PVP(ABC):
         # remove second dimension as we always have exactly one <mask> per example
         logits = torch.squeeze(logits, 1)
         cls_logits = torch.stack(
-            [self._convert_single_mlm_logits_to_cls_logits(lgt) for lgt in logits])
+            [self._convert_single_mlm_logits_to_cls_logits(lgt) for lgt in logits]
+        )
         return cls_logits
 
     @staticmethod
@@ -270,7 +332,7 @@ class PVP(ABC):
         verbalizers = defaultdict(dict)
         current_pattern_id = None
 
-        with open(path, 'r') as fh:
+        with open(path, "r") as fh:
             for line in fh.read().splitlines():
                 if line.isdigit():
                     current_pattern_id = int(line)
@@ -278,29 +340,33 @@ class PVP(ABC):
                     label, *realizations = line.split()
                     verbalizers[current_pattern_id][label] = realizations
 
-        logger.info("Automatically loaded the following verbalizer: \n {}".format(
-            verbalizers[pattern_id]))
+        logger.info(
+            "Automatically loaded the following verbalizer: \n {}".format(
+                verbalizers[pattern_id]
+            )
+        )
 
         def verbalize(label) -> List[str]:
             return verbalizers[pattern_id][label]
 
         return verbalize
 
+
 ##################################################
 # Super GLUE PVPs
 ##################################################
 
+# TODO how are these patterns inserting the trainable mask tokens?
+
 
 class RtePVP(PVP):
-    VERBALIZER = {
-        "not_entailment": ["No"],
-        "entailment": ["Yes"]
-    }
+    VERBALIZER = {"not_entailment": ["No"], "entailment": ["Yes"]}
 
-    PATTERN = ['text_a', 'Question:', 'text_b',
-               "?", "the", "Answer:", 'self.mask', "."]
+    # TODO standardize pattern based on MNLI entailment prompting format
 
-    BLOCK_FLAG = [0, 0, 0, 0, 1, 0, 0, 0]
+    PATTERN = ["text_a", "Question:", "text_b", "?", "the", "Answer:", "self.mask", "."]
+
+    BLOCK_FLAG = [0, 0, 0, 0, 1, 0, 0, 0]  # What exactly does this represent?
 
     def get_parts(self, example: InputExample) -> FilledPattern:
         # switch text_a and text_b to get the correct order
@@ -315,8 +381,16 @@ class RtePVP(PVP):
             # string_list_a = [text_a, 'Question:', text_b, "?", "the" , self.mask]
 
             # few-shot
-            string_list_a = [text_a, 'Question:', text_b,
-                             "?", "the", "Answer:", self.mask, "."]
+            string_list_a = [
+                text_a,
+                "Question:",
+                text_b,
+                "?",
+                "the",
+                "Answer:",
+                self.mask,
+                ".",
+            ]
             string_list_b = []
             block_flag_a = self.BLOCK_FLAG
             block_flag_b = []
@@ -329,14 +403,19 @@ class RtePVP(PVP):
 
 
 class CbPVP(PVP):
-    VERBALIZER = {
-        "contradiction": ["No"],
-        "entailment": ["Yes"],
-        "neutral": ["Maybe"]
-    }
 
-    PATTERN = ['text_a',  "[SEP]", 'example.text_b',
-               "?", 'the',  " answer: ", 'self.mask']
+    # 3 labels -> 3 verbalizer tokens
+    VERBALIZER = {"contradiction": ["No"], "entailment": ["Yes"], "neutral": ["Maybe"]}
+
+    PATTERN = [
+        "text_a",
+        "[SEP]",
+        "example.text_b",
+        "?",
+        "the",
+        " answer: ",
+        "self.mask",
+    ]
 
     BLOCK_FLAG = [0, 0, 0, 0, 1, 0, 0]
 
@@ -355,8 +434,15 @@ class CbPVP(PVP):
         # few-shot
         if self.pattern_id == 1:
 
-            string_list_a = [text_a,  "[SEP]", example.text_b,
-                             "?", 'the',  " answer: ", self.mask]
+            string_list_a = [
+                text_a,
+                "[SEP]",
+                example.text_b,
+                "?",
+                "the",
+                " answer: ",
+                self.mask,
+            ]
             string_list_b = []
             block_flag_a = self.BLOCK_FLAG
             block_flag_b = []
@@ -369,17 +455,17 @@ class CopaPVP(PVP):
     def get_parts(self, example: InputExample) -> FilledPattern:
 
         premise = self.remove_final_punc(self.shortenable(example.text_a))
-        choice1 = self.remove_final_punc(
-            self.lowercase_first(example.meta['choice1']))
-        choice2 = self.remove_final_punc(
-            self.lowercase_first(example.meta['choice2']))
+        choice1 = self.remove_final_punc(self.lowercase_first(example.meta["choice1"]))
+        choice2 = self.remove_final_punc(self.lowercase_first(example.meta["choice2"]))
 
-        question = example.meta['question']
-        assert question in ['cause', 'effect']
+        question = example.meta["question"]
+        assert question in ["cause", "effect"]
 
-        example.meta['choice1'], example.meta['choice2'] = choice1, choice2
-        num_masks = max(len(get_verbalization_ids(
-            c, self.wrapper.tokenizer, False)) for c in [choice1, choice2])
+        example.meta["choice1"], example.meta["choice2"] = choice1, choice2
+        num_masks = max(
+            len(get_verbalization_ids(c, self.wrapper.tokenizer, False))
+            for c in [choice1, choice2]
+        )
 
         if question == "cause":
             joiner = "because"
@@ -396,8 +482,17 @@ class CopaPVP(PVP):
         if self.pattern_id == 1:
             if question == "cause":
 
-                string_list_a = [choice1, 'or', choice2, '?', premise,
-                                 'because', 'the', self.mask * num_masks, '.']
+                string_list_a = [
+                    choice1,
+                    "or",
+                    choice2,
+                    "?",
+                    premise,
+                    "because",
+                    "the",
+                    self.mask * num_masks,
+                    ".",
+                ]
                 string_list_b = []
                 block_flag_a = [0, 0, 0, 0, 0, 0, 1, 0, 0]
                 block_flag_b = []
@@ -407,8 +502,17 @@ class CopaPVP(PVP):
 
             elif question == "effect":
 
-                string_list_a = [choice1, 'or', choice2, '?',
-                                 premise, 'so', 'the', self.mask * num_masks, '.']
+                string_list_a = [
+                    choice1,
+                    "or",
+                    choice2,
+                    "?",
+                    premise,
+                    "so",
+                    "the",
+                    self.mask * num_masks,
+                    ".",
+                ]
                 string_list_b = []
                 block_flag_a = [0, 0, 0, 0, 0, 0, 1, 0, 0]
                 block_flag_b = []
@@ -417,31 +521,35 @@ class CopaPVP(PVP):
                 return string_list_a, string_list_b, block_flag_a, block_flag_b
 
             else:
-                raise ValueError(
-                    "currently not support the kind of questions.")
+                raise ValueError("currently not support the kind of questions.")
         else:
             raise ValueError("unknown pattern_ids.")
 
 
 class WscPVP(PVP):
-    PATTERN = ['text_a', "the", "pronoun '*",
-               'pronoun', "*' refers to",  'masks' + '.']
+    PATTERN = ["text_a", "the", "pronoun '*", "pronoun", "*' refers to", "masks" + "."]
 
     BLOCK_FLAG = [0, 1, 0, 0, 0, 0]
 
     def get_parts(self, example: InputExample) -> FilledPattern:
-        pronoun = example.meta['span2_text']
-        target = example.meta['span1_text']
-        pronoun_idx = example.meta['span2_index']
+        pronoun = example.meta["span2_text"]
+        target = example.meta["span1_text"]
+        pronoun_idx = example.meta["span2_index"]
 
         words_a = example.text_a.split()
-        words_a[pronoun_idx] = '*' + words_a[pronoun_idx] + '*'
-        text_a = ' '.join(words_a)
+        words_a[pronoun_idx] = "*" + words_a[pronoun_idx] + "*"
+        text_a = " ".join(words_a)
         text_a = self.shortenable(text_a)
 
-        num_pad = self.rng.randint(0, 3) if 'train' in example.guid else 1
-        num_masks = len(get_verbalization_ids(
-            target, self.wrapper.tokenizer, force_single_token=False)) + num_pad
+        num_pad = self.rng.randint(0, 3) if "train" in example.guid else 1
+        num_masks = (
+            len(
+                get_verbalization_ids(
+                    target, self.wrapper.tokenizer, force_single_token=False
+                )
+            )
+            + num_pad
+        )
         masks = self.mask * num_masks
 
         # searched patterns in fully-supervised learning
@@ -453,8 +561,14 @@ class WscPVP(PVP):
         # few-shot
         if self.pattern_id == 1:
 
-            string_list_a = [text_a, "the", "pronoun '*",
-                             pronoun, "*' refers to",  masks + '.']
+            string_list_a = [
+                text_a,
+                "the",
+                "pronoun '*",
+                pronoun,
+                "*' refers to",
+                masks + ".",
+            ]
             string_list_b = []
             block_flag_a = [0, 1, 0, 0, 0, 0]
             block_flag_b = []
@@ -463,8 +577,15 @@ class WscPVP(PVP):
             return string_list_a, string_list_b, block_flag_a, block_flag_b
 
         elif self.pattern_id == 2:
-            string_list_a = ["the", text_a, "the", "pronoun '*",
-                             pronoun, "*' refers to",  masks + '.']
+            string_list_a = [
+                "the",
+                text_a,
+                "the",
+                "pronoun '*",
+                pronoun,
+                "*' refers to",
+                masks + ".",
+            ]
             string_list_b = []
             block_flag_a = [1, 0, 1, 0, 0, 0, 0]
             block_flag_b = []
@@ -475,10 +596,7 @@ class WscPVP(PVP):
 
 class BoolQPVP(PVP):
 
-    VERBALIZER = {
-        "False": ["No"],
-        "True": ["Yes"]
-    }
+    VERBALIZER = {"False": ["No"], "True": ["Yes"]}  # Simple choice
     """
     VERBALIZER_B = {
         "False": ["false"],
@@ -486,8 +604,16 @@ class BoolQPVP(PVP):
     }
     """
 
-    PATTERN = ['passage', '.', 'the', ' Question: ',
-               'question', '? Answer: ', 'self.mask', '.']
+    PATTERN = [
+        "passage",
+        ".",
+        "the",
+        " Question: ",
+        "question",
+        "? Answer: ",
+        "self.mask",
+        ".",
+    ]
 
     BLOCK_FLAG = [0, 0, 1, 0, 0, 0, 0, 0]
 
@@ -503,8 +629,16 @@ class BoolQPVP(PVP):
         # few-shot
         if self.pattern_id == 1:
 
-            string_list_a = [passage, '.', 'the', ' Question: ',
-                             question, '? Answer: ', self.mask, '.']
+            string_list_a = [
+                passage,
+                ".",
+                "the",
+                " Question: ",
+                question,
+                "? Answer: ",
+                self.mask,
+                ".",
+            ]
             string_list_b = []
             block_flag_a = self.BLOCK_FLAG
             block_flag_b = []
@@ -517,29 +651,44 @@ class BoolQPVP(PVP):
 
 
 class MultiRcPVP(PVP):
-    VERBALIZER = {
-        "0": ["No"],
-        "1": ["Yes"]
-    }
+    VERBALIZER = {"0": ["No"], "1": ["Yes"]}
 
     # search patterns in fully-supervised learning
     # string_list_a = [passage, 'Question: ', question, '?', "Is it", answer, '?', 'the', self.mask]
     # string_list_a = [passage, 'Question: ', question, '?', "the", answer, '?', 'the', self.mask]
 
     # few-shot
-    PATTERN = ['passage', '. Question: ', 'question',
-               '? Is it ', 'answer', '?', "the", 'self.mask', '.']
+    PATTERN = [
+        "passage",
+        ". Question: ",
+        "question",
+        "? Is it ",
+        "answer",
+        "?",
+        "the",
+        "self.mask",
+        ".",
+    ]
 
     BLOCK_FLAG = [0, 0, 0, 0, 0, 0, 1, 0, 0]
 
     def get_parts(self, example: InputExample) -> FilledPattern:
         passage = self.shortenable(example.text_a)
         question = example.text_b
-        answer = example.meta['answer']
+        answer = example.meta["answer"]
 
         if self.pattern_id == 1:
-            string_list_a = [passage, '. Question: ', question,
-                             '? Is it ', answer, '?', "the", self.mask, '.']
+            string_list_a = [
+                passage,
+                ". Question: ",
+                question,
+                "? Is it ",
+                answer,
+                "?",
+                "the",
+                self.mask,
+                ".",
+            ]
             string_list_b = []
             block_flag_a = self.BLOCK_FLAG
             block_flag_b = []
@@ -552,19 +701,16 @@ class MultiRcPVP(PVP):
 
 
 class WicPVP(PVP):
-    VERBALIZER = {
-        "F": ["No"],
-        "T": ["Yes"]
-    }
+    VERBALIZER = {"F": ["No"], "T": ["Yes"]}
 
-    PATTERN = ['text_a', '[SEP]', 'text_b', "the", 'word' + '?', 'self.mask']
+    PATTERN = ["text_a", "[SEP]", "text_b", "the", "word" + "?", "self.mask"]
 
     BLOCK_FLAG = [0, 0, 0, 1, 0, 0]
 
     def get_parts(self, example: InputExample) -> FilledPattern:
         text_a = self.shortenable(example.text_a)
         text_b = self.shortenable(example.text_b)
-        word = "*" + example.meta['word'] + " *"
+        word = "*" + example.meta["word"] + " *"
 
         # searched patterns in fully-supervised learning
         # string_list_a = [text_a, '[SEP]', text_b, "the" , word, '?', self.mask]
@@ -574,8 +720,7 @@ class WicPVP(PVP):
         # few-shot
         if self.pattern_id == 1:
 
-            string_list_a = [text_a, '[SEP]',
-                             text_b, "the", word + '?', self.mask]
+            string_list_a = [text_a, "[SEP]", text_b, "the", word + "?", self.mask]
             string_list_b = []
             block_flag_a = [0, 0, 0, 1, 0, 0]
             block_flag_b = []
@@ -584,8 +729,15 @@ class WicPVP(PVP):
             return string_list_a, string_list_b, block_flag_a, block_flag_b
 
         elif self.pattern_id == 2:
-            string_list_a = [text_a, '[SEP]', text_b,
-                             "the", word + '?', "the", self.mask]
+            string_list_a = [
+                text_a,
+                "[SEP]",
+                text_b,
+                "the",
+                word + "?",
+                "the",
+                self.mask,
+            ]
             string_list_b = []
             block_flag_a = [0, 0, 0, 1, 0, 1, 0]
             block_flag_b = []
@@ -594,8 +746,16 @@ class WicPVP(PVP):
             return string_list_a, string_list_b, block_flag_a, block_flag_b
 
         elif self.pattern_id == 3:
-            string_list_a = ["the", text_a, '[SEP]',
-                             text_b, "the", word + '?', "the", self.mask]
+            string_list_a = [
+                "the",
+                text_a,
+                "[SEP]",
+                text_b,
+                "the",
+                word + "?",
+                "the",
+                self.mask,
+            ]
             string_list_b = []
             block_flag_a = [1, 0, 0, 0, 1, 0, 1, 0]
             block_flag_b = []
@@ -604,8 +764,17 @@ class WicPVP(PVP):
             return string_list_a, string_list_b, block_flag_a, block_flag_b
 
         elif self.pattern_id == 4:
-            string_list_a = ["the", text_a, '[SEP]', text_b,
-                             "the", word + '?', "the", self.mask, "the"]
+            string_list_a = [
+                "the",
+                text_a,
+                "[SEP]",
+                text_b,
+                "the",
+                word + "?",
+                "the",
+                self.mask,
+                "the",
+            ]
             string_list_b = []
             block_flag_a = [1, 0, 0, 0, 1, 0, 1, 0, 1]
             block_flag_b = []
@@ -620,31 +789,27 @@ class WicPVP(PVP):
 # GLUE PVPs
 ##################################################
 
+
 class Sst2PVP(PVP):
     VERBALIZER = {
         # "0": ["terrible"],
         # "1": ["great"]
-
         # Strange label setting
         # "0": ["cat"],
         # "1": ["dog"]
-
         # "0": ["not"],
         # "1": ["a"]
-
-        "0": ["a"],
-        "1": ["fun"]
-
+        "0": ["a"],  # how is this a valid verbalizer for negative sentiment
+        "1": ["fun"]  # doesn't really matter since they will be optimized
         # Multiple label setting
         # "0": ["terrible", "bad", "awful"],
         # "1": ["great", "good", "wonderful"]
-
         # Reversed label setting
         # '0': ['great'],
         # '1': ['terrible']
     }
 
-    PATTERN = ['text_a', 'It', 'was', 'self.mask', '.']
+    PATTERN = ["text_a", "It", "was", "self.mask", "."]
     BLOCK_FLAG = [0, 1, 1, 0, 1]
 
     # Only mask setting
@@ -655,7 +820,7 @@ class Sst2PVP(PVP):
         text_a = self.shortenable(example.text_a)
 
         # few-shot
-        string_list_a = [text_a, 'It', 'was', self.mask, '.']
+        string_list_a = [text_a, "It", "was", self.mask, "."]
         # string_list_a = [text_a, self.mask]
         string_list_b = []
         block_flag_a = self.BLOCK_FLAG
@@ -666,20 +831,17 @@ class Sst2PVP(PVP):
 
 
 class ColaPVP(PVP):
-    VERBALIZER = {
-        "0": ["incorrect"],
-        "1": ["correct"]
-    }
+    VERBALIZER = {"0": ["incorrect"], "1": ["correct"]}
 
-    PATTERN = ['text_a', 'This', 'is', 'self.mask', '.']
+    PATTERN = ["text_a", "This", "is", "self.mask", "."]
 
-    BLOCK_FLAG = [0, 1, 1, 0, 1]
+    BLOCK_FLAG = [0, 1, 1, 0, 1]  # Example of training multiple prompt tokens
 
     def get_parts(self, example: InputExample) -> FilledPattern:
         text_a = self.shortenable(example.text_a)
 
         # few-shot
-        string_list_a = [text_a, 'This', 'is', self.mask, '.']
+        string_list_a = [text_a, "This", "is", self.mask, "."]
         string_list_b = []
         block_flag_a = self.BLOCK_FLAG
         block_flag_b = []
@@ -695,7 +857,6 @@ class Sst5PVP(PVP):
         "2": ["okay"],
         "3": ["good"],
         "4": ["great"]
-
         # "0": ["terrible"],
         # "1": ["disappointing"],
         # "2": ["."],
@@ -703,7 +864,7 @@ class Sst5PVP(PVP):
         # "4": ["amazing"]
     }
 
-    PATTERN = ['text_a', 'It', 'was', 'self.mask', '.']
+    PATTERN = ["text_a", "It", "was", "self.mask", "."]
 
     BLOCK_FLAG = [0, 1, 1, 0, 1]
 
@@ -711,7 +872,7 @@ class Sst5PVP(PVP):
         text_a = self.shortenable(example.text_a)
 
         # few-shot
-        string_list_a = [text_a, 'It', 'was', self.mask, '.']
+        string_list_a = [text_a, "It", "was", self.mask, "."]
         string_list_b = []
         block_flag_a = self.BLOCK_FLAG
         block_flag_b = []
@@ -721,10 +882,7 @@ class Sst5PVP(PVP):
 
 
 class SubjPVP(ColaPVP):
-    VERBALIZER = {
-        "0": ["subjective"],
-        "1": ["objective"]
-    }
+    VERBALIZER = {"0": ["subjective"], "1": ["objective"]}
 
 
 class TrecPVP(PVP):
@@ -734,10 +892,10 @@ class TrecPVP(PVP):
         "2": ["Expression"],
         "3": ["Human"],
         "4": ["Location"],
-        "5": ["Number"]
+        "5": ["Number"],
     }
 
-    PATTERN = ['self.mask', ':', 'text_a']
+    PATTERN = ["self.mask", ":", "text_a"]  # 1 psuedotoken as prompt
 
     BLOCK_FLAG = [0, 1, 0]
 
@@ -745,7 +903,7 @@ class TrecPVP(PVP):
         text_a = self.shortenable(example.text_a)
 
         # few-shot
-        string_list_a = [self.mask, ':', text_a]
+        string_list_a = [self.mask, ":", text_a]
         string_list_b = []
         block_flag_a = self.BLOCK_FLAG
         block_flag_b = []
@@ -755,13 +913,22 @@ class TrecPVP(PVP):
 
 
 class MnliPVP(PVP):
-    VERBALIZER = {
-        "contradiction": ["No"],
-        "entailment": ["Yes"],
-        "neutral": ["Maybe"]
-    }
 
-    PATTERN = ['text_a', '?', 'self.mask', ',', 'text_b']
+    # Simple 3 class entailment, is it really three class?
+    VERBALIZER = {"contradiction": ["No"], "entailment": ["Yes"], "neutral": ["Maybe"]}
+
+    PATTERN = [
+        "text_a",
+        "?",
+        "self.mask",
+        ",",
+        "text_b",
+    ]  # should we use the masked token as standard entailment?
+    # no because we only have a checkpoint for the standard finetuning method on MNLI
+
+    # Is self.mask where trainable pseudotokens are placed? No it's the
+    # Block flag corresponds to positions of trainable pseudotokens
+    # How to aapth for our purposes?
 
     BLOCK_FLAG = [0, 1, 0, 1, 0]
 
@@ -770,7 +937,7 @@ class MnliPVP(PVP):
         text_b = self.shortenable(example.text_b)
 
         # few-shot
-        string_list_a = [text_a, '?', self.mask, ',', text_b]
+        string_list_a = [text_a, "?", self.mask, ",", text_b]
         string_list_b = []
         block_flag_a = self.BLOCK_FLAG
         block_flag_b = []
@@ -782,56 +949,61 @@ class MnliPVP(PVP):
 class QnliPVP(MnliPVP):
     VERBALIZER = {
         "not_entailment": ["No"],
-        "entailment": ["Yes"]
-    }
+        "entailment": ["Yes"],
+    }  # Change the MNLI entailment to two class
 
 
 class MrpcPVP(MnliPVP):
-    VERBALIZER = {
-        "0": ["No"],
-        "1": ["Yes"]
-    }
+    VERBALIZER = {"0": ["No"], "1": ["Yes"]}  # Change the MNLI entailment to two class
 
 
 class MRPVP(Sst2PVP):
-    VERBALIZER = {
-        "0": ["bizarre"],
-        "1": ["memorable"]
-    }
+    VERBALIZER = {"0": ["bizarre"], "1": ["memorable"]}
 
 
 class CRPVP(Sst2PVP):
-    VERBALIZER = {
-        "0": ["impossible"],
-        "1": ["it"]
-    }
+    VERBALIZER = {"0": ["impossible"], "1": ["it"]}
+
+
+class EFL(PVP):
+    """
+    Base PVP class for the entailment setup
+    """
+
+    VERBALIZER = {"0": ["No"], "1": ["Yes"]}  # standard is two class entailment
+
+    PATTERN = [
+        "text_a",
+        "?",
+        "self.mask",
+        "text_b",
+    ]
 
 
 PVPS = {
     # Super GLUE PVPs
-    'rte': RtePVP,
-    'wic': WicPVP,
-    'cb': CbPVP,
-    'wsc': WscPVP,
-    'boolq': BoolQPVP,
-    'copa': CopaPVP,
-    'multirc': MultiRcPVP,
-
+    "rte": RtePVP,
+    "wic": WicPVP,
+    "cb": CbPVP,
+    "wsc": WscPVP,
+    "boolq": BoolQPVP,
+    "copa": CopaPVP,
+    "multirc": MultiRcPVP,
     # GLUE PVPs
-    'SST-2': Sst2PVP,
-    'CoLA': ColaPVP,
-    'sst-5': Sst5PVP,
-    'mr': MRPVP,
-    'cr': CRPVP,
-    'mpqa': Sst2PVP,
-    'subj': SubjPVP,
-    'trec': TrecPVP,
-    'MNLI': MnliPVP,
-    'mnli-mm': MnliPVP,
-    'SNLI': MnliPVP,
-    'QNLI': QnliPVP,
-    'rte-glue': QnliPVP,
-    'MRPC': MrpcPVP,
-    'QQP': MrpcPVP,
-    'sts-b': MrpcPVP
+    "SST-2": Sst2PVP,
+    "CoLA": ColaPVP,
+    "sst-5": Sst5PVP,
+    "mr": MRPVP,
+    "cr": CRPVP,
+    "mpqa": Sst2PVP,
+    "subj": SubjPVP,
+    "trec": TrecPVP,
+    "MNLI": MnliPVP,
+    "mnli-mm": MnliPVP,
+    "SNLI": MnliPVP,
+    "QNLI": QnliPVP,
+    "rte-glue": QnliPVP,
+    "MRPC": MrpcPVP,
+    "QQP": MrpcPVP,
+    "sts-b": MrpcPVP,
 }

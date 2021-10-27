@@ -368,7 +368,9 @@ class TransformerModelWrapper(object):
         embedding_parameters = None
         stage = kwargs.get("stage", 0)
 
-        if self.config.prompt_encoder_type == "lstm":
+        if (
+            self.config.prompt_encoder_type == "lstm"
+        ):  # p tuning method requires tuning extra LSTM parameters
             embedding_parameters = [
                 {"params": [p for p in cur_model.lstm_head.parameters()]},
                 {"params": [p for p in cur_model.mlp_head.parameters()]},
@@ -482,7 +484,6 @@ class TransformerModelWrapper(object):
         for _ in train_iterator:  # iterate over epochs
             for step, batch in enumerate(train_dataloader):  # iterate over batches
                 self.model.train()  # set model to training mode
-                # how is this being trained on the specific batch?
                 if extra_mask_rate > 0.0:
                     self._add_extra_mask(batch, extra_mask_rate)
                 if self.config.device == "cuda":
@@ -500,7 +501,9 @@ class TransformerModelWrapper(object):
                 if self.task_helper:
                     loss = self.task_helper.train_step(batch)
                 else:
-                    loss = self.mlm_train_step(batch)
+                    loss = self.mlm_train_step(
+                        batch
+                    )  # main training step to compute loss
 
                 if n_gpu > 1:
                     loss = (
@@ -724,7 +727,9 @@ class TransformerModelWrapper(object):
         outputs = model.model(**inputs)  # run model on inputs
 
         # Post processing steps
-        if self.config.prompt_encoder_type == "inner":
+        if (
+            self.config.prompt_encoder_type == "inner"
+        ):  # convet logist over vocabulary size to class probabilities
             prediction_scores = self.encoder.convert_mlm_logits_to_cls_logits(
                 mlm_labels, outputs[0]
             )
@@ -738,7 +743,9 @@ class TransformerModelWrapper(object):
         )
 
         # Add loss of extra masked tokens -> what is this?
-        if "extra_mlm_labels" in labeled_batch:
+        if (
+            "extra_mlm_labels" in labeled_batch
+        ):  # is this the fluency constraint objective?
             extra_mlm_labels = labeled_batch["extra_mlm_labels"]
             extra_loss = nn.CrossEntropyLoss()(
                 outputs[0].view(-1, self.tokenizer.vocab_size),
