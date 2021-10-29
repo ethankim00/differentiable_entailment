@@ -153,6 +153,16 @@ class PromptEncoder(object):
         return word_embeddings(self.lookup_tensor.to(word_embeddings.weight.device))
 
     def convert_mlm_logits_to_cls_logits(self, mlm_labels, logits):
+        """Convert logits from masked language model to
+
+        Args:
+            mlm_labels ([type]): [description]
+            logits ([type]): [description]
+
+        Returns:
+            [type]: [description]
+        """
         return torch.index_select(
             logits[mlm_labels != -1], -1, self.m2c_tensor.to(logits.device)
         )
+        # index into masked token logit, take last entry

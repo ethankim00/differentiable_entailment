@@ -33,6 +33,7 @@ from transformers import (
     AdamW,
     get_linear_schedule_with_warmup,
     AutoModelForMaskedLM,
+    AutoModelForSequenceClassification,
     AutoConfig,
     AutoTokenizer,
     GPT2LMHeadModel,
@@ -75,7 +76,7 @@ class ContinuousPrompt(nn.Module):
         self.hidden_size = self.embed_size
 
         # The pattern_id is supposed to indicate the number of continuous prompt tokens.
-        # Determine number of continuous prompt tokens - probably something that we tune
+        # Determine number of continuous prompt tokens - probably something that we tune yes
         prompt_length = 0
         for idx, val in enumerate(pvp.BLOCK_FLAG):
             if val == 1:
@@ -104,7 +105,7 @@ class ContinuousPrompt(nn.Module):
 
         # Initialize modules for prompt encoding
         # LSTM is equivalent to p tuning paer
-        # MLP is DART main method?
+        # MLP is DART main method?, no inner is?
         if config.prompt_encoder_type == "lstm":
             self.lstm_head = torch.nn.LSTM(
                 input_size=self.hidden_size,
@@ -133,6 +134,27 @@ class ContinuousPrompt(nn.Module):
 
         else:
             raise ValueError("unknown prompt_encoder_type.")
+
+    def _add_classification_head(self, model_config):
+        """
+        Load pretrained sequence classification head from _ForSequenceClassification
+        and add it to the _ForMaskedLM model
+
+        Note: Only makes sense to copy over the classifier weights if Intermediate Training
+        is on 2 class NLI task. MNLI is 3 class entailment, so we can initialize a new
+        2 class output head and train that
+
+        Returns:
+            adds classifier (nn.Module) to model
+        """
+        classifier = AutoModelForSequenceClassification.from_pretrained(
+            self.config.model_name_or_path,
+            config=model_config,
+            cache_dir=self.config.cache_dir if self.config.cache_dir else None,
+        )
+        # Try copy.deepcopy or load_state_dict
+        # for load_state_dict have to initialize R
+        self.model.classifier = classifier.classifier
 
 
 class TransformerModelWrapper(object):
@@ -171,6 +193,8 @@ class TransformerModelWrapper(object):
             self.model.cuda()
             # Use automatic mixed precision for faster training
             # self.scaler = GradScaler()
+
+        # TODO add Classifcation Head Projections
 
     def save(self, path: str) -> None:
         """Logic to save all the addition torch nn modules to file
@@ -491,6 +515,7 @@ class TransformerModelWrapper(object):
                         k: t.cuda() for k, t in batch.items()
                     }  # move the batch data to GPU
 
+                # TODO expand input x num_lables
                 # Casts operations to mixed precision
                 # with torch.cuda.amp.autocast():
                 #     loss = self.task_helper.train_step(
@@ -725,11 +750,12 @@ class TransformerModelWrapper(object):
         mlm_labels, labels = labeled_batch["mlm_labels"], labeled_batch["labels"]
         model = self.model.module if hasattr(self.model, "module") else self.model
         outputs = model.model(**inputs)  # run model on inputs
+        # Should return logits over vocabulary size for each position in sequence
 
         # Post processing steps
         if (
             self.config.prompt_encoder_type == "inner"
-        ):  # convet logist over vocabulary size to class probabilities
+        ):  # get cls logits from the masked tokens
             prediction_scores = self.encoder.convert_mlm_logits_to_cls_logits(
                 mlm_labels, outputs[0]
             )
@@ -738,20 +764,23 @@ class TransformerModelWrapper(object):
                 mlm_labels, outputs[0]
             )
         # actually calculate loss
+        # is this over whole vocabulary, not, just over labels
         loss = nn.CrossEntropyLoss()(
             prediction_scores.view(-1, len(self.config.label_list)), labels.view(-1)
-        )
+        )  # Prediction loss
 
-        # Add loss of extra masked tokens -> what is this?
+        # Do fluency constraint objective
         if (
             "extra_mlm_labels" in labeled_batch
-        ):  # is this the fluency constraint objective?
-            extra_mlm_labels = labeled_batch["extra_mlm_labels"]
+        ):  # is this the fluency constraint objective? Yes
+            extra_mlm_labels = labeled_batch["extra_mlm_labels"]  #
             extra_loss = nn.CrossEntropyLoss()(
-                outputs[0].view(-1, self.tokenizer.vocab_size),
-                extra_mlm_labels.view(-1),
+                outputs[0].view(
+                    -1, self.tokenizer.vocab_size
+                ),  # logits over entire vocabulary
+                extra_mlm_labels.view(-1),  # cross entropy over labels
             )
-            loss += extra_loss
+            loss += extra_loss  # why don't I see the lambda hyperparameter mentioned in paper?
 
         return loss
 
@@ -764,7 +793,9 @@ class TransformerModelWrapper(object):
 
         # Get outputs of encoder in last layer
         masked_full_logits = outputs[0][batch["mlm_labels"] >= 0]
-        masked_hidden_states = outputs[1][-1][batch["mlm_labels"] >= 0]
+        masked_hidden_states = outputs[1][-1][
+            batch["mlm_labels"] >= 0
+        ]  # Why do we need the hidden states?
 
         if self.config.prompt_encoder_type == "inner":
             return (
@@ -981,26 +1012,39 @@ class TransformerModelWrapper(object):
         return inputs
 
     def _add_extra_mask(self, batch: Dict[str, torch.Tensor], mask_rate: float) -> None:
+        """Mask some random set of tokens, not including pseudotokens
+
+        Args:
+            batch (Dict[str, torch.Tensor]): [description]
+            mask_rate (float): Proportion of input tokens to mask
+            TODO: experiment with some sort of annealing / learning schedule for the mask rate
+        """
         input_ids = batch["input_ids"]
         block_flag = batch["block_flag"]
         tokenizer = self.tokenizer
         mask_id, pad_id = tokenizer.mask_token_id, tokenizer.pad_token_id
         special_token_id_set = set(
             tokenizer.convert_tokens_to_ids(tokenizer.special_tokens_map.values())
-        )
-        extra_mlm_labels = torch.ones_like(input_ids, dtype=torch.long) * -100
+        )  # Get set of special tokens
+        extra_mlm_labels = (
+            torch.ones_like(input_ids, dtype=torch.long) * -100
+        )  # initially set to -1
         for idx in range(len(input_ids)):
             maskable_pos = []
             for pos in range(len(input_ids[idx])):
-                if input_ids[idx][pos].item() == pad_id:
+                if input_ids[idx][pos].item() == pad_id:  # End of actual sequence
                     break
                 if input_ids[idx][pos].item() not in special_token_id_set:
-                    if block_flag[idx][pos] == 0:
+                    if (
+                        block_flag[idx][pos] == 0
+                    ):  # Mask tokens that are not psuedotokens
                         maskable_pos.append(pos)
             mask_count = int(len(maskable_pos) * mask_rate)
             mask_pos = np.random.choice(maskable_pos, mask_count, replace=False)
             for pos in mask_pos:
                 extra_mlm_labels[idx][pos] = input_ids[idx][pos]
-                input_ids[idx][pos] = mask_id
+                input_ids[idx][
+                    pos
+                ] = mask_id  # does this actually propagate mask to dictionary?
 
         batch["extra_mlm_labels"] = extra_mlm_labels

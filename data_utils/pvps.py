@@ -109,7 +109,7 @@ class PVP(ABC):
     def remove_final_punc(s: Union[str, Tuple[str, bool]]):
         """Remove the final punctuation mark"""
         if isinstance(s, tuple):
-            return PVP.remove_final_punc(s[0]), s[1]  # ABC call
+            return PVP.remove_final_punc(s[0]), s[1]  # ABC call?
         return s.rstrip(string.punctuation)
 
     @staticmethod
@@ -283,6 +283,7 @@ class PVP(ABC):
         return []
 
     def get_mask_positions(self, input_ids: List[int]) -> List[int]:
+        # mask non mask tokens
         label_idx = input_ids.index(self.mask_id)
         labels = [-1] * len(input_ids)
         labels[label_idx] = 1
@@ -291,29 +292,40 @@ class PVP(ABC):
     def convert_mlm_logits_to_cls_logits(
         self, mlm_labels: torch.Tensor, logits: torch.Tensor
     ) -> torch.Tensor:
-        masked_logits = logits[mlm_labels >= 0]
+        masked_logits = logits[mlm_labels >= 0]  # What are the MLM labels passed in?
         cls_logits = torch.stack(
             [self._convert_single_mlm_logits_to_cls_logits(ml) for ml in masked_logits]
         )
         return cls_logits
 
+    # TODO : can we skip the logic for verbalizers entirely?
     def _convert_single_mlm_logits_to_cls_logits(
         self, logits: torch.Tensor
     ) -> torch.Tensor:
+        """Convert Logist for Masked tokens to logits over output classes
+
+        Args:
+            logits (torch.Tensor): Logits for masked token, 1 x vocab_size
+
+        Returns:
+            torch.Tensor: Logits for classification, 1 x num_classes
+        """
         m2c = self.mlm_logits_to_cls_logits_tensor.to(logits.device)
         # filler_len.shape() == max_fillers
         filler_len = torch.tensor(
             [len(self.verbalize(label)) for label in self.wrapper.config.label_list],
             dtype=torch.float,
-        )
+        )  # Get number of verbalization tokens for each
         filler_len = filler_len.to(logits.device)
 
         # cls_logits.shape() == num_labels x max_fillers  (and 0 when there are not as many fillers).
-        cls_logits = logits[torch.max(torch.zeros_like(m2c), m2c)]
+        cls_logits = logits[torch.max(torch.zeros_like(m2c), m2c)]  # minimum is 0
         cls_logits = cls_logits * (m2c > 0).float()
 
         # cls_logits.shape() == num_labels
-        cls_logits = cls_logits.sum(axis=1) / filler_len
+        cls_logits = (
+            cls_logits.sum(axis=1) / filler_len
+        )  # normalize over number of verbalizer tokens for each class
         return cls_logits
 
     def convert_plm_logits_to_cls_logits(self, logits: torch.Tensor) -> torch.Tensor:

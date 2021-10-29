@@ -21,7 +21,7 @@ from torch.nn import CrossEntropyLoss
 
 from utils import InputFeatures, InputExample, get_verbalization_ids, trim_input_ids
 
-
+# TODO should we use task helper for new custom logic
 class TaskHelper(ABC):
     """
     A helper class that provides custom training and evaluation methods for tasks that do not fit in PETs default
@@ -37,7 +37,9 @@ class TaskHelper(ABC):
         self.wrapper = wrapper
         self.output = None
 
-    def train_step(self, batch: Dict[str, torch.Tensor], **kwargs) -> Optional[torch.Tensor]:
+    def train_step(
+        self, batch: Dict[str, torch.Tensor], **kwargs
+    ) -> Optional[torch.Tensor]:
         """
         Custom implementation of the train step for this task.
         :param batch: a batch of examples
@@ -45,7 +47,9 @@ class TaskHelper(ABC):
         """
         pass
 
-    def eval_step(self, batch: Dict[str, torch.Tensor], **kwargs) -> Optional[torch.Tensor]:
+    def eval_step(
+        self, batch: Dict[str, torch.Tensor], **kwargs
+    ) -> Optional[torch.Tensor]:
         """
         Custom implementation of the eval step for this task.
         :param batch: a batch of examples
@@ -53,7 +57,9 @@ class TaskHelper(ABC):
         """
         pass
 
-    def add_special_input_features(self, input_example: InputExample, input_features: InputFeatures) -> None:
+    def add_special_input_features(
+        self, input_example: InputExample, input_features: InputFeatures
+    ) -> None:
         """
         Add special features to the ``meta`` dictionary of a feature set
         :param input_example: the input example considered
@@ -62,7 +68,9 @@ class TaskHelper(ABC):
 
         pass
 
-    def add_features_to_dict(self, features: List[InputFeatures], feature_dict: Dict[str, torch.Tensor]) -> None:
+    def add_features_to_dict(
+        self, features: List[InputFeatures], feature_dict: Dict[str, torch.Tensor]
+    ) -> None:
         """
         Add special features from the ``meta`` dictionary of a sequence of features to the corresponding dictionary
         :param features: the sequence of features
@@ -83,12 +91,17 @@ class TaskHelper(ABC):
 class MultiRcTaskHelper(TaskHelper):
     """A custom task helper for the MultiRC dataset."""
 
-    def add_special_input_features(self, input_example: InputExample, input_features: InputFeatures) -> None:
-        input_features.meta['question_idx'] = input_example.meta['question_idx']
+    def add_special_input_features(
+        self, input_example: InputExample, input_features: InputFeatures
+    ) -> None:
+        input_features.meta["question_idx"] = input_example.meta["question_idx"]
 
-    def add_features_to_dict(self, features: List[InputFeatures], feature_dict: Dict[str, torch.Tensor]) -> None:
-        feature_dict['question_idx'] = torch.tensor(
-            [f.meta['question_idx'] for f in features], dtype=torch.long)
+    def add_features_to_dict(
+        self, features: List[InputFeatures], feature_dict: Dict[str, torch.Tensor]
+    ) -> None:
+        feature_dict["question_idx"] = torch.tensor(
+            [f.meta["question_idx"] for f in features], dtype=torch.long
+        )
 
 
 class CopaTaskHelper(TaskHelper):
@@ -97,55 +110,74 @@ class CopaTaskHelper(TaskHelper):
     def train_step(self, batch, **kwargs) -> Optional[torch.Tensor]:
 
         inputs = self.wrapper.generate_default_inputs(batch)
-        mask = batch['labels'].unsqueeze(1)
-        correct_targets = batch['choice1_token_ids'] * \
-            (1 - mask) + batch['choice2_token_ids'] * mask
-        wrong_targets = batch['choice1_token_ids'] * \
-            mask + batch['choice2_token_ids'] * (1 - mask)
+        mask = batch["labels"].unsqueeze(1)
+        correct_targets = (
+            batch["choice1_token_ids"] * (1 - mask) + batch["choice2_token_ids"] * mask
+        )
+        wrong_targets = batch["choice1_token_ids"] * mask + batch[
+            "choice2_token_ids"
+        ] * (1 - mask)
 
-        prediction_scores = self.wrapper.model(
-            **inputs)[0].view(-1, self.wrapper.model.model.config.vocab_size)
+        prediction_scores = self.wrapper.model(**inputs)[0].view(
+            -1, self.wrapper.model.model.config.vocab_size
+        )
         loss_fct = CrossEntropyLoss()
 
-        loss_correct_label = loss_fct(
-            prediction_scores, correct_targets.view(-1))
+        loss_correct_label = loss_fct(prediction_scores, correct_targets.view(-1))
         loss_wrong_label = loss_fct(prediction_scores, wrong_targets.view(-1))
         loss = 1 + loss_correct_label - loss_wrong_label
         loss[loss < 0] = 0
         return loss
 
-    def eval_step(self, batch: Dict[str, torch.Tensor], decoding_strategy: str = 'default', **kwargs):
+    def eval_step(
+        self,
+        batch: Dict[str, torch.Tensor],
+        decoding_strategy: str = "default",
+        **kwargs,
+    ):
 
-        assert batch['input_ids'].shape[0] == 1, 'eval_step() for COPA is only implemented for batch_size=1'
+        assert (
+            batch["input_ids"].shape[0] == 1
+        ), "eval_step() for COPA is only implemented for batch_size=1"
 
         log_probs = []
-        for choice in ['choice1', 'choice2']:
-            labels = batch[f'{choice}_token_ids']
+        for choice in ["choice1", "choice2"]:
+            labels = batch[f"{choice}_token_ids"]
             log_prob = self._get_choice_log_probability(
-                batch, labels, decoding_strategy=decoding_strategy)
+                batch, labels, decoding_strategy=decoding_strategy
+            )
             log_probs.append(log_prob)
 
         return torch.tensor([log_probs])
 
-    def _get_choice_log_probability(self, batch, target_sequence, decoding_strategy: str = 'default'):
+    def _get_choice_log_probability(
+        self, batch, target_sequence, decoding_strategy: str = "default"
+    ):
 
         # adjust the number of masks
         num_masks = sum(1 for tok_id in target_sequence[0] if tok_id != -100)
-        input_ids = trim_input_ids(batch['input_ids'], num_masks=num_masks,
-                                   pad_token_id=self.wrapper.tokenizer.pad_token_id,
-                                   mask_token_id=self.wrapper.tokenizer.mask_token_id)
+        input_ids = trim_input_ids(
+            batch["input_ids"],
+            num_masks=num_masks,
+            pad_token_id=self.wrapper.tokenizer.pad_token_id,
+            mask_token_id=self.wrapper.tokenizer.mask_token_id,
+        )
 
         log_probabilities = []
         original_batch = {}
         while True:
-            masks = [(idx, tok_id) for idx, tok_id in enumerate(
-                target_sequence[0]) if tok_id != -100]
+            masks = [
+                (idx, tok_id)
+                for idx, tok_id in enumerate(target_sequence[0])
+                if tok_id != -100
+            ]
             if not masks:  # there are no masks left to process, we are done
                 break
 
             original_batch["input_ids"] = input_ids
             original_batch["attention_mask"] = torch.tensor(
-                [[1] * len(input_ids[0])], dtype=torch.long).cuda()
+                [[1] * len(input_ids[0])], dtype=torch.long
+            ).cuda()
             original_batch["block_flag"] = batch["block_flag"]
             inputs = self.wrapper.generate_default_inputs(original_batch)
 
@@ -166,25 +198,35 @@ class CopaTaskHelper(TaskHelper):
 
         return sum(log_probabilities)
 
-    def add_special_input_features(self, input_example: InputExample, input_features: InputFeatures) -> None:
+    def add_special_input_features(
+        self, input_example: InputExample, input_features: InputFeatures
+    ) -> None:
 
         mask_start = input_features.input_ids.index(
-            self.wrapper.tokenizer.mask_token_id)
+            self.wrapper.tokenizer.mask_token_id
+        )
 
-        for choice in ['choice1', 'choice2']:
+        for choice in ["choice1", "choice2"]:
             choice_text = input_example.meta[choice]
             choice_token_ids = get_verbalization_ids(
-                choice_text, self.wrapper.tokenizer, force_single_token=False)
+                choice_text, self.wrapper.tokenizer, force_single_token=False
+            )
             mask_end = mask_start + len(choice_token_ids)
-            input_features.meta[f'{choice}_token_ids'] = [-100] * \
-                len(input_features.input_ids)
-            input_features.meta[f'{choice}_token_ids'][mask_start:mask_end] = choice_token_ids
+            input_features.meta[f"{choice}_token_ids"] = [-100] * len(
+                input_features.input_ids
+            )
+            input_features.meta[f"{choice}_token_ids"][
+                mask_start:mask_end
+            ] = choice_token_ids
 
-    def add_features_to_dict(self, features: List[InputFeatures], feature_dict: Dict[str, torch.Tensor]) -> None:
+    def add_features_to_dict(
+        self, features: List[InputFeatures], feature_dict: Dict[str, torch.Tensor]
+    ) -> None:
 
-        for choice in ['choice1', 'choice2']:
-            feature_dict[f'{choice}_token_ids'] = torch.tensor(
-                [f.meta[f'{choice}_token_ids'] for f in features], dtype=torch.long)
+        for choice in ["choice1", "choice2"]:
+            feature_dict[f"{choice}_token_ids"] = torch.tensor(
+                [f.meta[f"{choice}_token_ids"] for f in features], dtype=torch.long
+            )
 
 
 class WscTaskHelper(TaskHelper):
@@ -194,77 +236,100 @@ class WscTaskHelper(TaskHelper):
         super().__init__(wrapper)
         self.id_to_target = []
 
-    def add_special_input_features(self, input_example: InputExample, input_features: InputFeatures) -> None:
+    def add_special_input_features(
+        self, input_example: InputExample, input_features: InputFeatures
+    ) -> None:
 
         mask_start = input_features.input_ids.index(
-            self.wrapper.tokenizer.mask_token_id)
-        num_masks = input_features.input_ids.count(
-            self.wrapper.tokenizer.mask_token_id)
+            self.wrapper.tokenizer.mask_token_id
+        )
+        num_masks = input_features.input_ids.count(self.wrapper.tokenizer.mask_token_id)
         mask_end = mask_start + num_masks
 
-        target = input_example.meta['span1_text']
-        input_features.meta['target'] = target
+        target = input_example.meta["span1_text"]
+        input_features.meta["target"] = target
         target_token_ids = get_verbalization_ids(
-            target, self.wrapper.tokenizer, force_single_token=False)
-        input_features.meta['target_token_ids'] = [-100] * \
-            len(input_features.input_ids)
+            target, self.wrapper.tokenizer, force_single_token=False
+        )
+        input_features.meta["target_token_ids"] = [-100] * len(input_features.input_ids)
 
         # we also predict <pad> tokens at the missing positions
-        target_token_ids += [self.wrapper.tokenizer.pad_token_id] * \
-            (num_masks - len(target_token_ids))
-        input_features.meta['target_token_ids'][mask_start:mask_end] = target_token_ids
+        target_token_ids += [self.wrapper.tokenizer.pad_token_id] * (
+            num_masks - len(target_token_ids)
+        )
+        input_features.meta["target_token_ids"][mask_start:mask_end] = target_token_ids
 
-    def add_features_to_dict(self, features: List[InputFeatures], feature_dict: Dict[str, torch.Tensor]) -> None:
+    def add_features_to_dict(
+        self, features: List[InputFeatures], feature_dict: Dict[str, torch.Tensor]
+    ) -> None:
 
-        feature_dict['target_id'] = torch.tensor([len(self.id_to_target) + idx for idx, f in enumerate(features)],
-                                                 dtype=torch.long)
-        self.id_to_target += [f.meta['target'] for f in features]
-        feature_dict['target_token_ids'] = torch.tensor([f.meta['target_token_ids'] for f in features],
-                                                        dtype=torch.long)
+        feature_dict["target_id"] = torch.tensor(
+            [len(self.id_to_target) + idx for idx, f in enumerate(features)],
+            dtype=torch.long,
+        )
+        self.id_to_target += [f.meta["target"] for f in features]
+        feature_dict["target_token_ids"] = torch.tensor(
+            [f.meta["target_token_ids"] for f in features], dtype=torch.long
+        )
 
     def train_step(self, batch, **kwargs) -> Optional[torch.Tensor]:
 
         inputs = self.wrapper.generate_default_inputs(batch)
-        inputs['labels'] = batch['target_token_ids']
+        inputs["labels"] = batch["target_token_ids"]
         loss = self.wrapper.model(**inputs)[0]
         return loss
 
-    def eval_step(self, batch: Dict[str, torch.Tensor], decoding_strategy: str = 'default', **kwargs):
+    def eval_step(
+        self,
+        batch: Dict[str, torch.Tensor],
+        decoding_strategy: str = "default",
+        **kwargs,
+    ):
 
-        assert batch['input_ids'].shape[0] == 1, 'eval_step() for COPA is only implemented for batch_size=1'
+        assert (
+            batch["input_ids"].shape[0] == 1
+        ), "eval_step() for COPA is only implemented for batch_size=1"
 
         input_ids = batch["input_ids"]
         origin_batch = batch
 
         orig_mask_positions = [
-            idx for idx, input_id in enumerate(input_ids[0]) if input_id == self.wrapper.tokenizer.mask_token_id
+            idx
+            for idx, input_id in enumerate(input_ids[0])
+            if input_id == self.wrapper.tokenizer.mask_token_id
         ]
 
         while True:
             mask_positions = [
-                idx for idx, input_id in enumerate(input_ids[0]) if input_id == self.wrapper.tokenizer.mask_token_id
+                idx
+                for idx, input_id in enumerate(input_ids[0])
+                if input_id == self.wrapper.tokenizer.mask_token_id
             ]
             if not mask_positions:  # there are no masks left to process, we are done
                 input_ids = input_ids[0].detach().cpu().tolist()
-                output_actual = self.wrapper.tokenizer.decode([
-                    input_id for idx, input_id in enumerate(input_ids)
-                    if idx in orig_mask_positions and input_id not in self.wrapper.tokenizer.all_special_ids
-                ])
+                output_actual = self.wrapper.tokenizer.decode(
+                    [
+                        input_id
+                        for idx, input_id in enumerate(input_ids)
+                        if idx in orig_mask_positions
+                        and input_id not in self.wrapper.tokenizer.all_special_ids
+                    ]
+                )
 
-                output_expected = self.id_to_target[batch["target_id"][0].item(
-                )]
+                output_expected = self.id_to_target[batch["target_id"][0].item()]
 
                 # transform both outputs as described in the T5 paper
                 output_actual = output_actual.lower().strip()
-                output_actual = [w for w in re.split(
-                    '[^a-zA-Z]', output_actual) if w]
+                output_actual = [w for w in re.split("[^a-zA-Z]", output_actual) if w]
                 output_expected = output_expected.lower().strip()
-                output_expected = [w for w in re.split(
-                    '[^a-zA-Z]', output_expected) if w]
+                output_expected = [
+                    w for w in re.split("[^a-zA-Z]", output_expected) if w
+                ]
 
                 # compare outputs
                 if all(x in output_expected for x in output_actual) or all(
-                        x in output_actual for x in output_expected):
+                    x in output_actual for x in output_expected
+                ):
                     return torch.tensor([[0, 1]])
                 return torch.tensor([[1, 0]])
 
