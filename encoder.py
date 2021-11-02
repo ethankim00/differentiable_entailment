@@ -53,7 +53,9 @@ class PromptEncoder(object):
                     verbalizer_id != tokenizer.unk_token_id
                 ), "verbalization was tokenized as <UNK>"
                 label_token_ids.append(verbalizer_id)
-
+        self.entailment_label_id = tokenizer.encode(
+            "label", add_special_tokens=False, **kwargs
+        )
         assert (
             len(pattern_token_set) < 50 and len(label_token_ids) < 49
         )  # Can't have more than 50 classes or 50 trainable pseudotokens
