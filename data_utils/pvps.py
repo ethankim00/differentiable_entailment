@@ -126,7 +126,7 @@ class PVP(ABC):
         Encode an input example using this pattern-verbalizer pair.
 
         :param example: the input example to encode
-        :param priming: whether to use this example for priming
+        :param priming: whether to use this example for priming # TODO understand what the priming step represents
         :param labeled: if ``priming=True``, whether the label should be appended to this example
         :return: A tuple, consisting of a list of input ids and a list of token type ids
         """
@@ -990,6 +990,52 @@ class EFL(PVP):
         "self.mask",
         "text_b",
     ]
+
+    def __init__(
+        self,
+        num_traininable_tokens: int = 1,
+        train_verbalizer: bool = False,
+        use_prompt: bool = False,
+        two_sided: bool = False,
+    ):
+        # TODO control number + possition of prompt tokens here
+        # super(EFL).__init__(wrapper, pattern_id: int = 0, seed: int = 42):
+
+        self.num_traininable_tokens = num_traininable_tokens
+        self.train_verbalizer = train_verbalizer
+        self.use_prompt = use_prompt  # TODO logic to include this
+        self.two_sided = two_sided
+        self.BLOCK_FLAG = (
+            [0]
+            + [1] * self.num_traininable_tokens
+            + [1 if self.train_verbalizer else 0]
+        )
+        self.PATTERN = (
+            ["test_a"]
+            + [str(i) for i in range(self.num_traininable_tokens)]
+            + ["label"]
+        )
+
+    def get_parts(self, example: InputExample) -> FilledPattern:
+        """
+        Given an input example, apply a pattern to obtain two text sequences (text_a and text_b) containing exactly one
+        mask token (or one consecutive sequence of mask tokens for PET with multiple masks). If a task requires only a
+        single sequence of text, the second sequence should be an empty list.
+
+        ex: entailment? sent1, sent2 -> test_a,[mask] test_b
+
+        :param example: the input example to process
+        :return: Two sequences of text. All text segments can optionally be marked as being shortenable.
+        """
+        part_a = [self.shortenable(example.text_a)]
+        if not self.two_sided:
+            for i in range(self.num_traininable_tokens):
+                part_a.append(
+                    str(i)
+                )  # TODO make sure these will all end up all trainable psuedotokens
+            part_a.append("label")
+        block_flag_a = self.BLOCK_FLAG
+        return part_a, [], block_flag_a, []
 
 
 PVPS = {

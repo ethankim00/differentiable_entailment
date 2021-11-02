@@ -15,6 +15,7 @@ This file contains code for wrapping a transformer language model and
 provides convenience methods for training and inference.
 """
 
+import copy
 import jsonpickle
 import os
 from datetime import datetime
@@ -39,6 +40,7 @@ from transformers import (
     GPT2LMHeadModel,
 )  # TODO
 
+from transformers.models.roberta.modeling_roberta import RobertaClassificationHead
 import logging
 from data_utils import PVPS, load_task_helper, load_metrics, evaluate_results
 from config import WrapperConfig, EvalConfig
@@ -135,7 +137,20 @@ class ContinuousPrompt(nn.Module):
         else:
             raise ValueError("unknown prompt_encoder_type.")
 
-    def _add_classification_head(self, model_config):
+        if self.config.entailment:
+            if "mnli" in self.config.model_name_or_path:  # or roBERTA base
+                # Initialize separate classification head
+                self.model.classier = RobertaClassificationHead(config)
+            else:
+                # copy over two class entailment classification head weights
+                self._copy_classification_head(model_config)
+
+            # add class aggregator
+            self.model.class_aggregator = torch.nn.Linear(
+                self.config.num_classes, self.config.num_classes
+            )
+
+    def _copy_classification_head(self, model_config):
         """
         Load pretrained sequence classification head from _ForSequenceClassification
         and add it to the _ForMaskedLM model
@@ -154,7 +169,8 @@ class ContinuousPrompt(nn.Module):
         )
         # Try copy.deepcopy or load_state_dict
         # for load_state_dict have to initialize R
-        self.model.classifier = classifier.classifier
+        self.model.classifier = copy.deepcopy(classifier.classifier)
+        del classifier  # don't store whole other model
 
 
 class TransformerModelWrapper(object):
@@ -178,7 +194,7 @@ class TransformerModelWrapper(object):
         self.task_helper = load_task_helper(config.task_name, self)
         self.label_map = {label: i for i, label in enumerate(self.config.label_list)}
 
-        if config.prompt_encoder_type == "inner":
+        if config.prompt_encoder_type == "inner":  # What is prompt encoder?
             self.encoder = PromptEncoder(
                 self.tokenizer, self.pvp, config.label_list
             )  # Initialize prompt encoder
@@ -210,7 +226,9 @@ class TransformerModelWrapper(object):
             self.model.module if hasattr(self.model, "module") else self.model
         )
 
-        model_to_save.model.save_pretrained(path)
+        model_to_save.model.save_pretrained(
+            path
+        )  # TODO make sure this saves added classification head
         self.tokenizer.save_pretrained(path)
         self._save_config(path)
 
@@ -245,6 +263,7 @@ class TransformerModelWrapper(object):
         wrapper.pvp = PVPS[wrapper.config.task_name](wrapper, wrapper.config.pattern_id)
         wrapper.model = ContinuousPrompt(wrapper.config, wrapper.tokenizer, wrapper.pvp)
         wrapper.model.model = AutoModelForMaskedLM.from_pretrained(path)
+        # TODO make sure classification head is loaded
 
         # Load prompt embeddings
         save_path_file = os.path.join(path, "embeddings.pth")
@@ -265,6 +284,10 @@ class TransformerModelWrapper(object):
             wrapper.encoder = PromptEncoder(
                 wrapper.tokenizer, wrapper.pvp, wrapper.config.label_list
             )
+
+        if self.config.entailment:
+            # logic to load or initialize classification head
+            pass
 
         wrapper.label_map = {
             label: i for i, label in enumerate(wrapper.config.label_list)
@@ -447,6 +470,8 @@ class TransformerModelWrapper(object):
                 if kwargs.get("fix_other_embeddings", False):
                     handle = self.encoder.add_embed_hook(cur_model.model)
                     # embedding_parameters[0]['weight_decay'] = 0.0
+
+                # TODO add logic to freeze or train clasification head for entailment
         optimizer_list, scheduler_list = [], []
         optimizer_list.append(
             AdamW(optimizer_grouped_parameters, lr=1e-5, eps=adam_epsilon)
@@ -508,6 +533,10 @@ class TransformerModelWrapper(object):
         for _ in train_iterator:  # iterate over epochs
             for step, batch in enumerate(train_dataloader):  # iterate over batches
                 self.model.train()  # set model to training mode
+
+                if self.config.entailment:
+                    # TODO expand instances in batch to batch_size x num_labels instances for forward pass
+                    pass
                 if extra_mask_rate > 0.0:
                     self._add_extra_mask(batch, extra_mask_rate)
                 if self.config.device == "cuda":
@@ -523,8 +552,13 @@ class TransformerModelWrapper(object):
                 #     if loss is None:
                 #         loss = self.mlm_train_step(batch)
 
-                if self.task_helper:
+                if (
+                    self.task_helper
+                ):  # Want general EFL train step not one for each task
                     loss = self.task_helper.train_step(batch)
+
+                elif self.config.entailment:
+                    loss = self.entailment_train_step(batch)
                 else:
                     loss = self.mlm_train_step(
                         batch
@@ -742,6 +776,87 @@ class TransformerModelWrapper(object):
 
         return evaluate_results(results, metrics)
 
+    def expand_labeled_batches(
+        self, labeled_batch: Dict[str, torch.Tensor]
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Expand batch for entailment training
+
+        Args:
+            labeled_batch (Dict[str, torch.Tensor]): Labled Instances
+
+        Returns:
+            Dict[str, torch.Tensor]: Expanded Batch with num_classes entries for each
+        """
+        if self.config.num_classes <= 2:
+            return labeled_batch
+        else:
+            for instance in labled_batch:
+                for output_class in list(self.model.pvp.VERBALIZER.keys()):
+                    output_class_token = 
+                    labeled_batch["input_ids"][(labeled_batch["input_ids"] == 2).nonzero(as_tuple=True)[0]] = 
+
+
+        # Access label class id from encoder
+        self.model.label_convert[output_class]
+
+    def entailment_train_step(
+        self, labeled_batch: Dict[str, torch.Tensor]
+    ) -> torch.Tensor:
+        # TODO expand forward pass here or in training loop
+
+        labled_batch = self.expand_labled_batches(labeled_batch)
+        inputs = self._generate_default_inputs(
+            labeled_batch
+        )  # some additional preprocessing on batch
+        mlm_labels, labels = (
+            labeled_batch["mlm_labels"],
+            labeled_batch["labels"],
+        )
+        model = self.model.module if hasattr(self.model, "module") else self.model
+        outputs = model.model(**inputs)
+        # TODO figure out reshaping to aggregate across instances
+        # Assume outputs[1] is the hidden states
+        # outputs[1] shape B, sequence length x hidden size
+        # Do pooling manually?
+        # entailment_logits.shape = (B,)
+        entailment_logits = model.model.classifier(
+            outputs[1]
+        )  # pass in correct hidden states
+        # class.shape = (B/num_classes, num_classes)
+        if self.config.num_clases > 2:
+            class_scores = model.model.class_aggregator(
+                entailment_logits.view(-1, self.config.num_classes)
+            )
+            loss = nn.CrossEntropyLoss()(
+                class_scores.view(-1, len(self.config.label_list)), labels.view(-1)
+            )
+        else:
+            class_scores = model.model.class_aggregator(
+                entailment_logits.view(-1, self.config.num_classes)
+            )
+            loss = nn.CrossEntropyLoss()(class_scores.view(-1), labels.view(-1))
+
+        # Do fluency constraint objective
+        if (
+            "extra_mlm_labels" in labeled_batch
+        ):  # is this the fluency constraint objective? Yes
+            extra_mlm_labels = labeled_batch["extra_mlm_labels"]  #
+            extra_loss = nn.CrossEntropyLoss()(
+                outputs[0].view(
+                    -1, self.tokenizer.vocab_size
+                ),  # logits over entire vocabulary
+                extra_mlm_labels.view(-1),  # cross entropy over labels
+            )
+            loss += extra_loss
+
+        return loss
+
+    def entailment_eval_step(
+        self, labeled_batch: Dict[str, torch.Tensor]
+    ) -> torch.Tensor:
+        pass
+
     def mlm_train_step(self, labeled_batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         """Main Training Step of Model"""
         inputs = self._generate_default_inputs(
@@ -944,11 +1059,15 @@ class TransformerModelWrapper(object):
         block_flag = batch["block_flag"]
         model = self.model.module if hasattr(self.model, "module") else self.model
 
+        # Get word embedding from model
+        # word_embeddings.shape = (vocab_size, hidden_size)
         word_embeddings = (
             model.model.get_input_embeddings()
         )  # models method of getting word embeddings
+        # raw_embeds.shape = (len(input_ids), hidden_size)
         raw_embeds = word_embeddings(input_ids)
 
+        # replace with prompt embedings from model is this overwritten by inner?
         replace_embeds = model.prompt_embeddings(
             torch.LongTensor(list(range(model.prompt_length))).to(raw_embeds.device)
         )
@@ -957,6 +1076,7 @@ class TransformerModelWrapper(object):
 
         if self.config.prompt_encoder_type == "lstm":
             # [batch_size, seq_len, 2 * hidden_dim]
+            # run LSTM over embeddings
             replace_embeds = model.lstm_head(replace_embeds)[
                 0
             ]  # use LSTM over sequence of raw embeddings
@@ -994,9 +1114,12 @@ class TransformerModelWrapper(object):
                 .reshape((bz, model.prompt_length, 2))[:, :, 1]
             )
 
-            for bidx in range(bz):
+            for bidx in range(bz):  # iterate over samples in batch
                 for i in range(blocked_indices.shape[1]):
-                    raw_embeds[bidx, blocked_indices[bidx, i], :] = replace_embeds[i, :]
+                    raw_embeds[bidx, blocked_indices[bidx, i], :] = replace_embeds[
+                        i, :
+                    ]  # replace all the psuedotoken embeddings
+                    # does this really still backpropagate to the input token embedding?
             # replace certain raw_embeds with repalce inputs
 
         inputs = {

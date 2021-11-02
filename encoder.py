@@ -32,7 +32,7 @@ class PromptEncoder(object):
         ):  # Iterate over pattern - looks like only one pseodutoken is used per nonzero block flag
             if (
                 pvp.BLOCK_FLAG[idx] == 1
-            ):  # if block flag is equal to 1 (corresponding to "the" in the pattern)
+            ):  # if block flag is equal to 1 (corresponding to "the" in the pattern) -> we have a trainable pseudotoken
                 token_ids = tokenizer.encode(
                     part, add_special_tokens=False, **kwargs
                 )  # get token ids # encode "the" with the tokenizer
@@ -90,10 +90,13 @@ class PromptEncoder(object):
         )
 
         # Use lookup tensor to get replace embeddings
+        # pattern_token_indices = list of psuedotoken token ids
+        # self.pattern_convert dicitonary mapping our new tokens to index within roberta tokenizer vocabulary
         self.lookup_tensor = torch.tensor(
             [self.pattern_convert[origin] for origin in pattern_token_indices],
             dtype=torch.long,
         )
+        # self.lookup_tensor - tensor of psuedotoken indices within vocab
 
     def init_embed(self, model, random_=False):
         """
