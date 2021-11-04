@@ -533,7 +533,7 @@ class TransformerModelWrapper(object):
         for _ in train_iterator:  # iterate over epochs
             for step, batch in enumerate(train_dataloader):  # iterate over batches
                 self.model.train()  # set model to training mode
-
+                print(len(batch["input_ids"]))
                 if self.config.entailment:
                     # TODO expand instances in batch to batch_size x num_labels instances for forward pass
                     pass
@@ -846,11 +846,11 @@ class TransformerModelWrapper(object):
         )
         model = self.model.module if hasattr(self.model, "module") else self.model
         outputs = model.model(**inputs)
-        # TODO figure out reshaping to aggregate across instances
         # Assume outputs[1] is the hidden states
         # outputs[1] shape B, sequence length x hidden size
         # Do pooling manually?
         # entailment_logits.shape = (B,)
+        # TODO make sure we are passing correct hidden sstate to classifiner
         entailment_logits = model.model.classifier(
             outputs[1]
         )  # pass in correct hidden states
@@ -863,11 +863,8 @@ class TransformerModelWrapper(object):
                 class_scores.view(-1, len(self.config.label_list)), labels.view(-1)
             )
         else:
-            class_scores = model.model.class_aggregator(
-                entailment_logits.view(-1, self.config.num_classes)
-            )
-            loss = nn.CrossEntropyLoss()(class_scores.view(-1), labels.view(-1))
-
+            # Binary class case
+            loss = nn.CrossEntropyLoss()(entailment_logits.view(-1), labels.view(-1))
         # Do fluency constraint objective
         if (
             "extra_mlm_labels" in labeled_batch

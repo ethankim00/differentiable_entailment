@@ -999,7 +999,7 @@ class EFL(PVP):
         two_sided: bool = False,
     ):
         # TODO control number + possition of prompt tokens here
-        # super(EFL).__init__(wrapper, pattern_id: int = 0, seed: int = 42):
+        # super(EFL, self).__init__(wrapper, pattern_id: int = 0, seed: int = 42):
 
         self.num_traininable_tokens = num_traininable_tokens
         self.train_verbalizer = train_verbalizer
@@ -1015,6 +1015,7 @@ class EFL(PVP):
             + [str(i) for i in range(self.num_traininable_tokens)]
             + ["label"]
         )
+        # self.label_position = -1 * (len(self.pattern) - self.PATTERN.index("label"))
 
     def get_parts(self, example: InputExample) -> FilledPattern:
         """
