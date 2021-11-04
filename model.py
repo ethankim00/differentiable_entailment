@@ -146,6 +146,7 @@ class ContinuousPrompt(nn.Module):
                 self._copy_classification_head(model_config)
 
             # add class aggregator
+            self.config.num_classes = len(self.config.label_list)
             self.model.class_aggregator = torch.nn.Linear(
                 self.config.num_classes, self.config.num_classes
             )
@@ -836,7 +837,7 @@ class TransformerModelWrapper(object):
     ) -> torch.Tensor:
         # TODO expand forward pass here or in training loop
 
-        labeled_batch = self.expand_labeled_batches(labeled_batch)
+        labeled_batch = self.expand_labeled_batch(labeled_batch)
         inputs = self._generate_default_inputs(
             labeled_batch
         )  # some additional preprocessing on batch
@@ -851,6 +852,8 @@ class TransformerModelWrapper(object):
         # Do pooling manually?
         # entailment_logits.shape = (B,)
         # TODO make sure we are passing correct hidden sstate to classifiner
+        print(outputs[0].shape)
+        print(outputs)
         entailment_logits = model.model.classifier(
             outputs[1]
         )  # pass in correct hidden states
