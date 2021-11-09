@@ -105,6 +105,10 @@ class WrapperConfig(object):
         prompt_encoder_type="lstm",
         eval_every_step=20,
         entailment=False,
+        num_trainable_tokens: int = 1,
+        train_verbalizer: bool = False,
+        use_prompt: bool = False,
+        two_sided: bool = False,
     ):
         self.device = device
         self.model_type = model_type
@@ -119,6 +123,10 @@ class WrapperConfig(object):
         self.prompt_encoder_type = prompt_encoder_type
         self.eval_every_step = eval_every_step
         self.entailment = entailment
+        self.num_trainable_tokens = num_trainable_tokens
+        self.train_verbalizer = train_verbalizer
+        self.use_prompt = use_prompt
+        self.two_sided = two_sided
 
 
 def load_pet_configs(args) -> Tuple[WrapperConfig, TrainConfig, EvalConfig]:
@@ -138,6 +146,10 @@ def load_pet_configs(args) -> Tuple[WrapperConfig, TrainConfig, EvalConfig]:
         prompt_encoder_type=args.prompt_encoder_type,
         eval_every_step=args.eval_every_step,
         entailment=args.entailment,
+        num_trainable_tokens = args.num_trainable_tokens,
+        train_verbalizer = args.train_verbalizer,
+        use_prompt = args.use_prompt,
+        two_sided = args.two_sided,
     )
 
     train_cfg = TrainConfig(

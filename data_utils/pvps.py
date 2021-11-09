@@ -993,26 +993,26 @@ class EFL(PVP):
 
     def __init__(
         self,
-        num_traininable_tokens: int = 1,
+        *args,
+        num_trainable_tokens: int = 1,
         train_verbalizer: bool = False,
         use_prompt: bool = False,
         two_sided: bool = False,
     ):
         # TODO control number + possition of prompt tokens here
-        # super(EFL, self).__init__(wrapper, pattern_id: int = 0, seed: int = 42):
-
-        self.num_traininable_tokens = num_traininable_tokens
+        super(EFL, self).__init__(*args)
+        self.num_trainable_tokens = num_trainable_tokens
         self.train_verbalizer = train_verbalizer
         self.use_prompt = use_prompt  # TODO logic to include this
         self.two_sided = two_sided
         self.BLOCK_FLAG = (
             [0]
-            + [1] * self.num_traininable_tokens
+            + [1] * self.num_trainable_tokens
             + [1 if self.train_verbalizer else 0]
         )
         self.PATTERN = (
             ["test_a"]
-            + [str(i) for i in range(self.num_traininable_tokens)]
+            + [str(i) for i in range(self.num_trainable_tokens)]
             + ["label"]
         )
         # self.label_position = -1 * (len(self.pattern) - self.PATTERN.index("label"))
@@ -1030,7 +1030,7 @@ class EFL(PVP):
         """
         part_a = [self.shortenable(example.text_a)]
         if not self.two_sided:
-            for i in range(self.num_traininable_tokens):
+            for i in range(self.num_trainable_tokens):
                 part_a.append(
                     str(i)
                 )  # TODO make sure these will all end up all trainable psuedotokens
@@ -1065,4 +1065,5 @@ PVPS = {
     "MRPC": MrpcPVP,
     "QQP": MrpcPVP,
     "sts-b": MrpcPVP,
+    "entailment": EFL,
 }

@@ -163,6 +163,7 @@ class ContinuousPrompt(nn.Module):
         Returns:
             adds classifier (nn.Module) to model
         """
+        print("loading classifier")
         classifier = AutoModelForSequenceClassification.from_pretrained(
             self.config.model_name_or_path,
             config=model_config,
@@ -190,7 +191,18 @@ class TransformerModelWrapper(object):
 
         # Load pattern verbalizer pairs based on config
         self.pvp = PVPS[config.task_name](self, config.pattern_id)
+        if self.config.entailment:
+            print("initializing PVP")
+            self.pvp = PVPS["entailment"](
+                self, config.pattern_id,
+                num_trainable_tokens = config.num_trainable_tokens,
+                train_verbalizer = config.train_verbalizer,
+                use_prompt = config.use_prompt,
+                two_sided = config.two_sided,
+            ) # TODO set up PVP initialization properky
         # Initialize continuous prmpt model
+        print(self.pvp.PATTERN)
+        print(self.pvp.BLOCK_FLAG)
         self.model = ContinuousPrompt(config, self.tokenizer, self.pvp)
         self.task_helper = load_task_helper(config.task_name, self)
         self.label_map = {label: i for i, label in enumerate(self.config.label_list)}
@@ -534,10 +546,6 @@ class TransformerModelWrapper(object):
         for _ in train_iterator:  # iterate over epochs
             for step, batch in enumerate(train_dataloader):  # iterate over batches
                 self.model.train()  # set model to training mode
-                print(len(batch["input_ids"]))
-                if self.config.entailment:
-                    # TODO expand instances in batch to batch_size x num_labels instances for forward pass
-                    pass
                 if extra_mask_rate > 0.0:
                     self._add_extra_mask(batch, extra_mask_rate)
                 if self.config.device == "cuda":
@@ -846,28 +854,26 @@ class TransformerModelWrapper(object):
             labeled_batch["labels"],
         )
         model = self.model.module if hasattr(self.model, "module") else self.model
-        outputs = model.model(**inputs)
+        outputs = model.model(**inputs, output_hidden_states = True)
         # Assume outputs[1] is the hidden states
         # outputs[1] shape B, sequence length x hidden size
         # Do pooling manually?
         # entailment_logits.shape = (B,)
         # TODO make sure we are passing correct hidden sstate to classifiner
-        print(outputs[0].shape)
-        print(outputs)
         entailment_logits = model.model.classifier(
-            outputs[1]
-        )  # pass in correct hidden states
+            outputs.hidden_states[-1] # use hidden state of last layer
+        )  # # TODO did we do pooling correctly?
         # class.shape = (B/num_classes, num_classes)
-        if self.config.num_clases > 2:
+        if len(self.config.label_list) > 2:
             class_scores = model.model.class_aggregator(
-                entailment_logits.view(-1, self.config.num_classes)
+                entailment_logits.view(-1, len(self.config.label_list))
             )
             loss = nn.CrossEntropyLoss()(
                 class_scores.view(-1, len(self.config.label_list)), labels.view(-1)
             )
         else:
             # Binary class case
-            loss = nn.CrossEntropyLoss()(entailment_logits.view(-1), labels.view(-1))
+            loss = nn.CrossEntropyLoss()(entailment_logits.view(-1, 2), labels)
         # Do fluency constraint objective
         if (
             "extra_mlm_labels" in labeled_batch

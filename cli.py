@@ -226,9 +226,27 @@ parser.add_argument(
     help="Whether do random additional masking.",
 )
 
+
+parser.add_argument(
+    "--train_verbalizer", type=float, default=0.0, help="Whether to differentially train the verbalizer"
+)
+
 parser.add_argument(
     "--entailment", type=float, default=0.0, help="Whether to use EFL paradigm"
 )
+
+parser.add_argument(
+    "--num_trainable_tokens", type=int, default=1, help="Number of Trainable Pseudotokens"
+)
+
+parser.add_argument(
+    "--use_prompt", type=float, default=0.0, help="Whether to include the prompt tokens"
+)
+
+parser.add_argument(
+    "--two_sided", type=float, default=0.0, help="Whether to surround the verbalizer with prompt tokens"
+)
+
 
 
 def process_args(args):
