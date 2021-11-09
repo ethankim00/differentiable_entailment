@@ -138,13 +138,13 @@ class ContinuousPrompt(nn.Module):
             raise ValueError("unknown prompt_encoder_type.")
 
         if self.config.entailment:
-            if "mnli" in self.config.model_name_or_path:  # or roBERTA base
+            if "mnli" in self.config.model_name_or_path:  # TODO don't copy for roberta base
                 # Initialize separate classification head
-                self.model.classier = RobertaClassificationHead(config)
+                self.model.classifier = RobertaClassificationHead(config)
             else:
                 # copy over two class entailment classification head weights
                 self._copy_classification_head(model_config)
-
+            #self.model.classifier = RobertaClassificationHead(config)
             # add class aggregator
             self.config.num_classes = len(self.config.label_list)
             self.model.class_aggregator = torch.nn.Linear(
@@ -1022,10 +1022,15 @@ class TransformerModelWrapper(object):
         """
         features = []
         for example in examples:
+            print(example)
             # Preprocessor for models pretrained using a masked language modeling objective (e.g., BERT).
             input_ids, token_type_ids, block_flag = self.pvp.encode(
                 example
             )  # processing is based on PVP encode method
+            print("input_ids", input_ids)
+            print("block_flag")
+            print(block_flag)
+            print(self.tokenizer.decode(input_ids))
             attention_mask = [1] * len(
                 input_ids
             )  # always use fully visible attention max
@@ -1054,7 +1059,10 @@ class TransformerModelWrapper(object):
             logits = example.logits if example.logits else [-1]
 
             if labelled:
-                mlm_labels = self.pvp.get_mask_positions(input_ids)
+                if self.config.entailment:
+                    mlm_labels = [-1] * self.config.max_seq_length
+                else:
+                    mlm_labels = self.pvp.get_mask_positions(input_ids)
             else:
                 mlm_labels = [-1] * self.config.max_seq_length
 

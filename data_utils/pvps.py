@@ -283,7 +283,7 @@ class PVP(ABC):
         return []
 
     def get_mask_positions(self, input_ids: List[int]) -> List[int]:
-        # mask non mask tokens
+        # Get position of masked token for cloze completion
         label_idx = input_ids.index(self.mask_id)
         labels = [-1] * len(input_ids)
         labels[label_idx] = 1
