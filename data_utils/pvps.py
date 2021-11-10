@@ -1010,12 +1010,12 @@ class EFL(PVP):
         self.BLOCK_FLAG = (
             [0]
             + [1] * self.num_trainable_tokens
-            + [1 if self.train_verbalizer else 0]
+            + [1 if self.train_verbalizer else 0] + [0]
         )
         self.PATTERN = (
             ["test_a"]
             + [str(i) for i in range(self.num_trainable_tokens)]
-            + [self.LABEL]
+            + [self.LABEL, "."]
         )
         # self.label_position = -1 * (len(self.pattern) - self.PATTERN.index("label"))
 
@@ -1037,6 +1037,7 @@ class EFL(PVP):
                     str(i)
                 )  # TODO make sure these will all end up all trainable psuedotokens
             part_a.append(self.LABEL)
+            part_a.append(".")
         block_flag_a = self.BLOCK_FLAG
         return part_a, [], block_flag_a, []
 

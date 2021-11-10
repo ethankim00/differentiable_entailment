@@ -141,10 +141,12 @@ class ContinuousPrompt(nn.Module):
         if self.config.entailment:
             if "mnli" in self.config.model_name_or_path:  # TODO don't copy for roberta base
                 # Initialize separate classification head
-                self.model.classifier = RobertaClassificationHead(config)
+                #config.hidden_size = 1024
+                self._copy_classification_head(model_config)
             else:
                 # copy over two class entailment classification head weights
-                self._copy_classification_head(model_config)
+                self.model.classifier = RobertaClassificationHead(model_config)
+                
             #self.model.classifier = RobertaClassificationHead(config)
             # add class aggregator
             self.config.num_classes = len(self.config.label_list)
@@ -299,9 +301,9 @@ class TransformerModelWrapper(object):
                 wrapper.tokenizer, wrapper.pvp, wrapper.config.label_list
             )
 
-        if self.config.entailment:
-            # logic to load or initialize classification head
-            pass
+        # if self.config.entailment:
+        #     # logic to load or initialize classification head
+        #     pass
 
         wrapper.label_map = {
             label: i for i, label in enumerate(wrapper.config.label_list)
@@ -541,7 +543,6 @@ class TransformerModelWrapper(object):
         # PATCH @ 2021.09.27: Record evaluation results
         if kwargs.get("record_eval", False):
             all_eval_dev, all_eval_test = [], []
-
         extra_mask_rate = kwargs.get("extra_mask_rate", 0.0)
         train_iterator = trange(int(num_train_epochs), desc="Epoch")
         for _ in train_iterator:  # iterate over epochs
@@ -722,11 +723,19 @@ class TransformerModelWrapper(object):
                 logits = self.task_helper.eval_step(batch) if self.task_helper else None
                 if logits is None:
                     # PATCH @ 2021.09.27: add masked hidden states of each sentence
-                    (
-                        logits,
-                        masked_full_logits,
-                        masked_hidden_states,
-                    ) = self.mlm_eval_step(batch)
+                    if not self.config.entailment:
+                        (
+                            logits,
+                            masked_full_logits,
+                            masked_hidden_states,
+                        ) = self.mlm_eval_step(batch)
+                    else:
+                        (
+                            logits,
+                            masked_full_logits,
+                            masked_hidden_states,
+                        ) = self.entailment_eval_step(batch)
+
                     if all_masked_hidden_states is None:
                         all_masked_full_logits = (
                             masked_full_logits.detach().cpu().numpy()
@@ -745,7 +754,7 @@ class TransformerModelWrapper(object):
                             masked_hidden_states.detach().cpu().numpy(),
                             axis=0,
                         )
-
+                # Calculate evaluation loss
                 prediction_scores = logits.float()
                 eval_loss = nn.CrossEntropyLoss()(
                     prediction_scores.view(-1, len(self.config.label_list)),
@@ -773,7 +782,7 @@ class TransformerModelWrapper(object):
                         batch["question_idx"].detach().cpu().numpy(),
                         axis=0,
                     )
-
+        # mean loss, list of indices, predictions, labels etc
         results = {
             "eval_loss": np.mean(eval_losses),
             "indices": all_indices,
@@ -856,16 +865,16 @@ class TransformerModelWrapper(object):
         )
         model = self.model.module if hasattr(self.model, "module") else self.model
         outputs = model.model(**inputs, output_hidden_states = True)
-
-
+        # for _ in labeled_batch["input_ids"]:
+        #     print(self.tokenizer.decode(_))
         # Assume outputs[1] is the hidden states
         # outputs[1] shape B, sequence length x hidden size
         # Do pooling manually?
         # entailment_logits.shape = (B,)
         # TODO make sure we are passing correct hidden sstate to classifiner
         entailment_logits = model.model.classifier(
-            outputs.hidden_states[-1] # use hidden state of last layer
-        )  # # TODO did we do pooling correctly?
+            outputs.hidden_states[-1]# input hidden states
+        )  # # TODO use pooling instead of VLS
         # class.shape = (B/num_classes, num_classes)
         if len(self.config.label_list) > 2:
             class_scores = model.model.class_aggregator(
@@ -888,14 +897,44 @@ class TransformerModelWrapper(object):
                 ),  # logits over entire vocabulary
                 extra_mlm_labels.view(-1),  # cross entropy over labels
             )
-            loss += extra_loss
+            _lambda = 0.05
+            loss += _lambda * extra_loss
 
         return loss
 
     def entailment_eval_step(
         self, labeled_batch: Dict[str, torch.Tensor]
     ) -> torch.Tensor:
-        pass
+        """
+        Evaluation step for entailment method
+        """
+
+        labeled_batch = self.expand_labeled_batch(labeled_batch)
+        inputs = self._generate_default_inputs(labeled_batch) 
+        mlm_labels, labels = (
+            labeled_batch["mlm_labels"],
+            labeled_batch["labels"],
+        )
+        model = self.model.module if hasattr(self.model, "module") else self.model
+        outputs = model.model(**inputs, output_hidden_states = True)
+        # Likely don't need these for entailment since we aren't cloze completing a masked token
+        masked_full_logits = outputs[0][labeled_batch["mlm_labels"] >= 0]
+        masked_hidden_states = outputs[1][-1][
+            labeled_batch["mlm_labels"] >= 0
+        ]
+
+        entailment_logits = model.model.classifier(
+            outputs.hidden_states[-1] # use hidden state of last layer
+        )
+        if len(self.config.label_list) > 2:
+            entailment_logits = model.model.class_aggregator(
+                entailment_logits.view(-1, len(self.config.label_list))
+            )
+        return (
+            entailment_logits,
+            masked_full_logits,
+            masked_hidden_states,
+        )
 
     def mlm_train_step(self, labeled_batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         """Main Training Step of Model"""

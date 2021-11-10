@@ -17,6 +17,12 @@ python3 cli.py \
 --learning_rate 1e-4 \
 --eval_set "test" \
 --prompt_encoder_type "inner" \
+--entailment 1.0 \
+--num_trainable_tokens 3 \
+--train_verbalizer 0 \
+--use_prompt 0 \
+--two_sided 0 \
+--extra_mask_rate 0.1 \
 # --two_stage_train
 
 # Albert-xxlarge-v2

@@ -103,7 +103,7 @@ class WrapperConfig(object):
         output_dir=None,
         embed_size=-1,
         prompt_encoder_type="lstm",
-        eval_every_step=20,
+        eval_every_step=40,
         entailment=False,
         num_trainable_tokens: int = 1,
         train_verbalizer: bool = False,
