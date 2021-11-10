@@ -43,6 +43,7 @@ from transformers import (
 from transformers.models.roberta.modeling_roberta import RobertaClassificationHead
 import logging
 from data_utils import PVPS, load_task_helper, load_metrics, evaluate_results
+from data_utils.pvps import ENTAILMENT_PVPS
 from config import WrapperConfig, EvalConfig
 from utils import InputExample, InputFeatures, DictDataset
 from encoder import PromptEncoder
@@ -193,7 +194,7 @@ class TransformerModelWrapper(object):
         self.pvp = PVPS[config.task_name](self, config.pattern_id)
         if self.config.entailment:
             print("initializing PVP")
-            self.pvp = PVPS["entailment"](
+            self.pvp = ENTAILMENT_PVPS[config.task_name](
                 self, config.pattern_id,
                 num_trainable_tokens = config.num_trainable_tokens,
                 train_verbalizer = config.train_verbalizer,
@@ -815,7 +816,7 @@ class TransformerModelWrapper(object):
                         (
                             instance["input_ids"] == self.encoder.entailment_label_id
                         ).nonzero(as_tuple=True)[0]
-                    ] = output_class_trainable_id
+                    ] = output_class_trainable_id # Replace "label" placeholder with actual label
                     expanded_batch["input_ids"].append(instance)
                     expanded_batch["attention_mask"].append(
                         labeled_batch["attention_mask"][idx]
@@ -855,6 +856,8 @@ class TransformerModelWrapper(object):
         )
         model = self.model.module if hasattr(self.model, "module") else self.model
         outputs = model.model(**inputs, output_hidden_states = True)
+
+
         # Assume outputs[1] is the hidden states
         # outputs[1] shape B, sequence length x hidden size
         # Do pooling manually?
@@ -1022,15 +1025,10 @@ class TransformerModelWrapper(object):
         """
         features = []
         for example in examples:
-            print(example)
             # Preprocessor for models pretrained using a masked language modeling objective (e.g., BERT).
             input_ids, token_type_ids, block_flag = self.pvp.encode(
                 example
             )  # processing is based on PVP encode method
-            print("input_ids", input_ids)
-            print("block_flag")
-            print(block_flag)
-            print(self.tokenizer.decode(input_ids))
             attention_mask = [1] * len(
                 input_ids
             )  # always use fully visible attention max

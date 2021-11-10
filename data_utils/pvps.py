@@ -991,6 +991,8 @@ class EFL(PVP):
         "text_b",
     ]
 
+    LABEL = "label"
+
     def __init__(
         self,
         *args,
@@ -1013,7 +1015,7 @@ class EFL(PVP):
         self.PATTERN = (
             ["test_a"]
             + [str(i) for i in range(self.num_trainable_tokens)]
-            + ["label"]
+            + [self.LABEL]
         )
         # self.label_position = -1 * (len(self.pattern) - self.PATTERN.index("label"))
 
@@ -1034,10 +1036,19 @@ class EFL(PVP):
                 part_a.append(
                     str(i)
                 )  # TODO make sure these will all end up all trainable psuedotokens
-            part_a.append("label")
+            part_a.append(self.LABEL)
         block_flag_a = self.BLOCK_FLAG
         return part_a, [], block_flag_a, []
 
+
+class COLAEntailPVP(EFL):
+
+    LABEL = "correct"
+
+
+class SST2EntailPVP(EFL):
+
+    LABEL = "correct"
 
 PVPS = {
     # Super GLUE PVPs
@@ -1066,4 +1077,9 @@ PVPS = {
     "QQP": MrpcPVP,
     "sts-b": MrpcPVP,
     "entailment": EFL,
+}
+
+
+ENTAILMENT_PVPS = {
+    "CoLA" : COLAEntailPVP
 }
