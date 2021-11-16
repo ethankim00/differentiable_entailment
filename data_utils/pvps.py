@@ -1008,9 +1008,9 @@ class EFL(PVP):
         self.use_prompt = use_prompt  # TODO logic to include this
         self.two_sided = two_sided
         self.BLOCK_FLAG = (
-            [0]
+            [0] 
             + [1] * self.num_trainable_tokens
-            + [1 if self.train_verbalizer else 0] + [0]
+            + [1 if self.train_verbalizer else 0] + [0, 0]
         )
         self.PATTERN = (
             ["test_a"]
@@ -1037,6 +1037,7 @@ class EFL(PVP):
                     str(i)
                 )  # TODO make sure these will all end up all trainable psuedotokens
             part_a.append(self.LABEL)
+            part_a.append("</s>")
             part_a.append(".")
         block_flag_a = self.BLOCK_FLAG
         return part_a, [], block_flag_a, []
@@ -1049,7 +1050,17 @@ class COLAEntailPVP(EFL):
 
 class SST2EntailPVP(EFL):
 
-    LABEL = "correct"
+    LABEL = "great"
+
+
+class MREntailPVP(EFL):
+
+    LABEL = "great"
+
+
+class SubjEntailPVP(EFL):
+
+    LABEL = "objective"
 
 PVPS = {
     # Super GLUE PVPs
@@ -1082,5 +1093,8 @@ PVPS = {
 
 
 ENTAILMENT_PVPS = {
-    "CoLA" : COLAEntailPVP
+    "CoLA" : COLAEntailPVP,
+    "SST-2" : SST2EntailPVP,
+    "mr": MREntailPVP,
+    "subj": SubjEntailPVP,
 }

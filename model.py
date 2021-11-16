@@ -142,7 +142,8 @@ class ContinuousPrompt(nn.Module):
             if "mnli" in self.config.model_name_or_path:  # TODO don't copy for roberta base
                 # Initialize separate classification head
                 #config.hidden_size = 1024
-                self._copy_classification_head(model_config)
+                #self._copy_classification_head(model_config)
+                self.model.classifier = RobertaClassificationHead(model_config)
             else:
                 # copy over two class entailment classification head weights
                 self.model.classifier = RobertaClassificationHead(model_config)
@@ -195,7 +196,7 @@ class TransformerModelWrapper(object):
         # Load pattern verbalizer pairs based on config
         self.pvp = PVPS[config.task_name](self, config.pattern_id)
         if self.config.entailment:
-            print("initializing PVP")
+            print("Initializing PVP")
             self.pvp = ENTAILMENT_PVPS[config.task_name](
                 self, config.pattern_id,
                 num_trainable_tokens = config.num_trainable_tokens,
@@ -244,9 +245,12 @@ class TransformerModelWrapper(object):
 
         model_to_save.model.save_pretrained(
             path
-        )  # TODO make sure this saves added classification head
+        )  
         self.tokenizer.save_pretrained(path)
         self._save_config(path)
+        if self.config.entailment:
+            torch.save(self.model.model.classifier.state_dict(), path + "/classification_head")
+
 
         if self.config.prompt_encoder_type == "lstm":
             state = {
@@ -301,10 +305,40 @@ class TransformerModelWrapper(object):
                 wrapper.tokenizer, wrapper.pvp, wrapper.config.label_list
             )
 
-        # if self.config.entailment:
-        #     # logic to load or initialize classification head
-        #     pass
-
+        # try:
+        
+        # except: 
+        #     print("did not load head")
+        #     pass 
+        if "classification_head" in os.listdir(path):
+            print("Loading PVP")
+            wrapper.pvp = ENTAILMENT_PVPS[wrapper.config.task_name](
+                wrapper, wrapper.config.pattern_id,
+                num_trainable_tokens = wrapper.config.num_trainable_tokens,
+                train_verbalizer = wrapper.config.train_verbalizer,
+                use_prompt = wrapper.config.use_prompt,
+                two_sided = wrapper.config.two_sided,
+            ) 
+            if wrapper.config.prompt_encoder_type == "inner":
+                wrapper.encoder = PromptEncoder(
+                    wrapper.tokenizer, wrapper.pvp, wrapper.config.label_list
+                )
+            wrapper.model = ContinuousPrompt(wrapper.config, wrapper.tokenizer, wrapper.pvp)
+            wrapper.model.model = AutoModelForMaskedLM.from_pretrained(path)
+            prompt_length = 0
+            for idx, val in enumerate(wrapper.pvp.BLOCK_FLAG):
+                if val == 1:
+                    prompt_length += len(wrapper.tokenizer.tokenize(wrapper.pvp.PATTERN[idx]))
+            wrapper.model.prompt_length = prompt_length
+            model_config = AutoConfig.from_pretrained(
+                wrapper.config.model_name_or_path,
+                num_labels=len(wrapper.config.label_list),
+                finetuning_task=wrapper.config.task_name,
+                cache_dir=wrapper.config.cache_dir if wrapper.config.cache_dir else None,
+            )
+            wrapper.model.model.classifier = RobertaClassificationHead(model_config)
+            wrapper.model.model.classifier.load_state_dict(torch.load(path + "/classification_head"))
+            wrapper.model.model.classifier.eval()
         wrapper.label_map = {
             label: i for i, label in enumerate(wrapper.config.label_list)
         }
@@ -461,6 +495,15 @@ class TransformerModelWrapper(object):
                         "weight_decay": 0.0,
                     }
                 ]
+                if self.config.entailment:
+                    optimizer_grouped_parameters.append(
+                        {
+                            "params" : [
+                                p for p in cur_model.model.classifier.parameters()
+                            ], 
+                            "weight_decay" : 0.0, 
+                        }
+                    )
             else:
                 # Training stage 0 / 2: optimize all model weights with different learning rates
                 # This is used when training LM ONLY!
@@ -513,7 +556,6 @@ class TransformerModelWrapper(object):
                     num_training_steps=t_total,
                 )
             )
-
         now = datetime.now()
         path_suffix = now.strftime("%m-%d_%H:%M:%S") + "stage_%d" % stage
         writer = SummaryWriter(
@@ -554,7 +596,6 @@ class TransformerModelWrapper(object):
                     batch = {
                         k: t.cuda() for k, t in batch.items()
                     }  # move the batch data to GPU
-
                 # TODO expand input x num_lables
                 # Casts operations to mixed precision
                 # with torch.cuda.amp.autocast():
@@ -570,6 +611,8 @@ class TransformerModelWrapper(object):
 
                 elif self.config.entailment:
                     loss = self.entailment_train_step(batch)
+                    # print(cur_model.model.get_input_embeddings()(torch.LongTensor([50165]).to(self.config.device))) debug freezing embeddings
+                    # print(cur_model.model.get_input_embeddings()(torch.LongTensor([0]).to(self.config.device)))
                 else:
                     loss = self.mlm_train_step(
                         batch
@@ -668,10 +711,8 @@ class TransformerModelWrapper(object):
                                 "Dev scores: %.4f | early_stop_count: %d"
                                 % (dev_scores[save_metric_name], early_stop_count)
                             )
-
                 if 0 < max_steps < global_step or early_stop_count >= early_stop_epochs:
                     break
-
             if 0 < max_steps < global_step or early_stop_count >= early_stop_epochs:
                 train_iterator.close()
                 break
@@ -855,7 +896,7 @@ class TransformerModelWrapper(object):
     ) -> torch.Tensor:
         # TODO expand forward pass here or in training loop
 
-        labeled_batch = self.expand_labeled_batch(labeled_batch)
+        labeled_batch = self.expand_labeled_batch(labeled_batch) # it was LABEL -> it was good, it was bad, it was neutral B x num_labels
         inputs = self._generate_default_inputs(
             labeled_batch
         )  # some additional preprocessing on batch
@@ -874,12 +915,13 @@ class TransformerModelWrapper(object):
         # TODO make sure we are passing correct hidden sstate to classifiner
         entailment_logits = model.model.classifier(
             outputs.hidden_states[-1]# input hidden states
-        )  # # TODO use pooling instead of VLS
+        )  # # TODO use pooling instead of CLS
         # class.shape = (B/num_classes, num_classes)
+        #
         if len(self.config.label_list) > 2:
             class_scores = model.model.class_aggregator(
                 entailment_logits.view(-1, len(self.config.label_list))
-            )
+            ) # (B, num_classes)
             loss = nn.CrossEntropyLoss()(
                 class_scores.view(-1, len(self.config.label_list)), labels.view(-1)
             )
@@ -1183,7 +1225,6 @@ class TransformerModelWrapper(object):
         elif self.config.prompt_encoder_type == "inner":
             # assert set(self.encoder.pattern_convert.keys()) == set(input_ids[torch.where(block_flag==1)].tolist())
             replace_embeds = self.encoder.get_replace_embeds(word_embeddings)
-
         else:
             raise ValueError("unknown prompt_encoder_type.")
 

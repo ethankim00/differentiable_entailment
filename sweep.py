@@ -149,6 +149,14 @@ if __name__ == '__main__':
             run_args.batch_size = [4, 8, 16, 24, 32]
 
     # Prepare sweep config and get sweep id
+    # TODO add control for other parameters
+    # - model type
+    # - # shot 8, 16, 32
+    # - entailment yes /no 
+    # New Hyperparameters
+    # - use prompt
+    # - num trainable tokens
+    # - two sides
     sweep_config = {
         'program': run_args.task,
         'method': 'grid',

@@ -122,6 +122,8 @@ def train_pet(args):
 
             # Training
             logger.info("--- Start iteration %d ---" % iteration)
+            
+            stage = 0 if not train_config.parameter_efficient else 1 
             if args.do_train:
                 if not args.two_stage_train:
                     # Single stage training
@@ -330,7 +332,7 @@ def train_single_model(
         results_dict["average_loss"] = tr_loss
 
     # Load trained model and evaluate train set
-    # Loads the model that was just trained from storage?
+    # Loads the model that was just trained from storage? yes
     model = TransformerModelWrapper.from_pretrained(pattern_iter_output_dir)
     train_scores = model.eval(
         train_data,

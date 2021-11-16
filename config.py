@@ -44,6 +44,7 @@ class TrainConfig(PetConfig):
         alpha: float = 0.9999,
         early_stop_epochs: int = 5,
         two_stage_train: bool = False,
+        parameter_efficient: bool = False,
     ):
         self.device = device
         self.per_gpu_train_batch_size = per_gpu_train_batch_size
@@ -61,6 +62,7 @@ class TrainConfig(PetConfig):
         self.alpha = alpha
         self.early_stop_epochs = early_stop_epochs
         self.two_stage_train = two_stage_train
+        self.parameter_efficient = parameter_efficient
 
 
 class EvalConfig(PetConfig):

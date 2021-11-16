@@ -226,6 +226,10 @@ parser.add_argument(
     help="Whether do random additional masking.",
 )
 
+parser.add_argument(
+    "--parameter_efficient", action = "store_true", default = False,help="Whether to only train embedding parameters"
+)
+
 
 parser.add_argument(
     "--train_verbalizer", type=float, default=0.0, help="Whether to differentially train the verbalizer"
@@ -246,6 +250,9 @@ parser.add_argument(
 parser.add_argument(
     "--two_sided", type=float, default=0.0, help="Whether to surround the verbalizer with prompt tokens"
 )
+
+
+
 
 
 
