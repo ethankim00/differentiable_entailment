@@ -197,12 +197,14 @@ class TransformerModelWrapper(object):
         self.pvp = PVPS[config.task_name](self, config.pattern_id)
         if self.config.entailment:
             print("Initializing PVP")
+            print(config.num_trainable_tokens)
             self.pvp = ENTAILMENT_PVPS[config.task_name](
                 self, config.pattern_id,
                 num_trainable_tokens = config.num_trainable_tokens,
                 train_verbalizer = config.train_verbalizer,
                 use_prompt = config.use_prompt,
                 two_sided = config.two_sided,
+                train_prompt = config.train_prompt,
             ) # TODO set up PVP initialization properky
         # Initialize continuous prmpt model
         print(self.pvp.PATTERN)
@@ -216,7 +218,18 @@ class TransformerModelWrapper(object):
                 self.tokenizer, self.pvp, config.label_list
             )  # Initialize prompt encoder
             # Random init prompt tokens HERE!
-            self.encoder.init_embed(self.model.model, random_=False)
+            #for _ in list(self.encoder.pattern_convert.keys()):
+             #   print(self.tokenizer.decode(_))
+            
+            prompt_tokens = self.pvp.PROMPT + [self.pvp.LABEL] + ["."]
+            prompt_token_ids = [self.tokenizer.encode(" " + pt)[1] for pt in prompt_tokens]
+            #print(prompt_token_ids)
+            if self.config.entailment:
+                self.encoder.init_embed(self.model.model, prompt_token_ids = prompt_token_ids)
+            else:
+                self.encoder.init_embed(self.model.model, random_=False)
+            
+                
 
         if config.device == "cuda":
             if (
@@ -318,6 +331,7 @@ class TransformerModelWrapper(object):
                 train_verbalizer = wrapper.config.train_verbalizer,
                 use_prompt = wrapper.config.use_prompt,
                 two_sided = wrapper.config.two_sided,
+                train_prompt = wrapper.config.train_prompt
             ) 
             if wrapper.config.prompt_encoder_type == "inner":
                 wrapper.encoder = PromptEncoder(
@@ -483,6 +497,7 @@ class TransformerModelWrapper(object):
         elif self.config.prompt_encoder_type == "inner":
             if stage == 1:
                 # Training stage 1: only optimize prompt-related tokens
+                print("Training Stage 1")
                 handle = self.encoder.add_embed_hook(
                     cur_model.model
                 )  # Stage 1 set certain parameters with 0 weight decay
@@ -495,6 +510,8 @@ class TransformerModelWrapper(object):
                         "weight_decay": 0.0,
                     }
                 ]
+                # Also finetune the classification head if we are doing entailment
+                # TODO try tuning with separate learning rate schedules
                 if self.config.entailment:
                     optimizer_grouped_parameters.append(
                         {
@@ -533,7 +550,7 @@ class TransformerModelWrapper(object):
                 # TODO add logic to freeze or train clasification head for entailment
         optimizer_list, scheduler_list = [], []
         optimizer_list.append(
-            AdamW(optimizer_grouped_parameters, lr=1e-5, eps=adam_epsilon)
+            AdamW(optimizer_grouped_parameters, lr=1e-4, eps=adam_epsilon)
         )
         scheduler_list.append(
             get_linear_schedule_with_warmup(
@@ -611,8 +628,10 @@ class TransformerModelWrapper(object):
 
                 elif self.config.entailment:
                     loss = self.entailment_train_step(batch)
-                    # print(cur_model.model.get_input_embeddings()(torch.LongTensor([50165]).to(self.config.device))) debug freezing embeddings
+                    # print(cur_model.model.classifier.dense.weight)
+                    # print(cur_model.model.get_input_embeddings()(torch.LongTensor([50165]).to(self.config.device))) #debug freezing embeddings
                     # print(cur_model.model.get_input_embeddings()(torch.LongTensor([0]).to(self.config.device)))
+                    # print(cur_model.model.roberta.encoder.layer[0].attention.self.query.weight) # Print some random model weights
                 else:
                     loss = self.mlm_train_step(
                         batch
@@ -906,8 +925,9 @@ class TransformerModelWrapper(object):
         )
         model = self.model.module if hasattr(self.model, "module") else self.model
         outputs = model.model(**inputs, output_hidden_states = True)
-        # for _ in labeled_batch["input_ids"]:
+        # for i, _ in enumerate(labeled_batch["input_ids"]):
         #     print(self.tokenizer.decode(_))
+        #     print(labeled_batch["block_flag"][i])
         # Assume outputs[1] is the hidden states
         # outputs[1] shape B, sequence length x hidden size
         # Do pooling manually?

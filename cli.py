@@ -210,7 +210,7 @@ parser.add_argument(
     default="lstm",
     choices=["lstm", "mlp", "none", "inner"],
 )
-parser.add_argument("--eval_every_step", default=20, type=int, help="")
+parser.add_argument("--eval_every_step", default=40, type=int, help="")
 
 # Enhanced training
 parser.add_argument(
@@ -227,7 +227,7 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--parameter_efficient", action = "store_true", default = False,help="Whether to only train embedding parameters"
+    "--parameter_efficient", action = "store_true", default = False ,help="Whether to only train embedding parameters"
 )
 
 
@@ -250,6 +250,11 @@ parser.add_argument(
 parser.add_argument(
     "--two_sided", type=float, default=0.0, help="Whether to surround the verbalizer with prompt tokens"
 )
+
+parser.add_argument(
+    "--train_prompt", type=float, default=0.0, help="Whether to differentially optimize the prompt tokens"
+)
+
 
 
 

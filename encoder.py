@@ -100,7 +100,7 @@ class PromptEncoder(object):
         )
         # self.lookup_tensor - tensor of psuedotoken indices within vocab
 
-    def init_embed(self, model, random_=False):
+    def init_embed(self, model, random_=False, prompt_token_ids = None):
         """
         Initialize embeddings for a model
 
@@ -109,20 +109,39 @@ class PromptEncoder(object):
         Args:
             model ([type]): [description]
             random_ (bool, optional): [description]. Defaults to False.
+        
+        Initialize trainable pseudotokens randomly while initializing prompt and label tokens from their default embedding value
+
         """
         w = model.get_input_embeddings().weight.data
-        for origin_id, convert_id in self.pattern_convert.items():
-            if random_:
-                max_val = w[convert_id].abs().max()
-                w[convert_id].uniform_(-max_val, max_val)
-            else:
-                w[convert_id] = w[origin_id]
-        for origin_id, convert_id in self.label_convert.items():
-            if random_:
-                max_val = w[convert_id].abs().max()
-                w[convert_id].uniform_(-max_val, max_val)
-            else:
-                w[convert_id] = w[origin_id]
+        print(self.pattern_convert)
+        print(prompt_token_ids)
+        if not prompt_token_ids:
+            for origin_id, convert_id in self.pattern_convert.items():
+                if random_:
+                    max_val = w[convert_id].abs().max()
+                    w[convert_id].uniform_(-max_val, max_val)
+                else:
+                    w[convert_id] = w[origin_id]
+            for origin_id, convert_id in self.label_convert.items():
+                if random_:
+                    max_val = w[convert_id].abs().max()
+                    w[convert_id].uniform_(-max_val, max_val)
+                else:
+                    w[convert_id] = w[origin_id]
+        else:
+            for origin_id, convert_id in self.pattern_convert.items():
+                if not origin_id in prompt_token_ids:
+                    max_val = w[convert_id].abs().max()
+                    w[convert_id].uniform_(-max_val, max_val)
+                else:
+                    w[convert_id] = w[origin_id]
+            for origin_id, convert_id in self.label_convert.items():
+                if not origin_id in prompt_token_ids:
+                    max_val = w[convert_id].abs().max()
+                    w[convert_id].uniform_(-max_val, max_val)
+                else:
+                    w[convert_id] = w[origin_id]
 
     def add_embed_hook(self, model):
         def stop_gradient(_, grad_input, __):  # Freeze some paramters
@@ -133,6 +152,7 @@ class PromptEncoder(object):
         trainable_ids = list(self.pattern_convert.values()) + list(
             self.label_convert.values()
         )
+        print(trainable_ids)
         grad_mask = torch.zeros((self.vocab_size, 1), dtype=torch.float)
         grad_mask[trainable_ids, 0] = 1.0
 

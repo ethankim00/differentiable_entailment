@@ -992,6 +992,7 @@ class EFL(PVP):
     ]
 
     LABEL = "label"
+    PROMPT = []
 
     def __init__(
         self,
@@ -1000,6 +1001,7 @@ class EFL(PVP):
         train_verbalizer: bool = False,
         use_prompt: bool = False,
         two_sided: bool = False,
+        train_prompt: bool = False, 
     ):
         # TODO control number + possition of prompt tokens here
         super(EFL, self).__init__(*args)
@@ -1007,17 +1009,53 @@ class EFL(PVP):
         self.train_verbalizer = train_verbalizer
         self.use_prompt = use_prompt  # TODO logic to include this
         self.two_sided = two_sided
-        self.BLOCK_FLAG = (
-            [0] 
-            + [1] * self.num_trainable_tokens
-            + [1 if self.train_verbalizer else 0] + [0, 0]
-        )
-        self.PATTERN = (
-            ["test_a"]
-            + [str(i) for i in range(self.num_trainable_tokens)]
-            + [self.LABEL, "."]
-        )
-        # self.label_position = -1 * (len(self.pattern) - self.PATTERN.index("label"))
+        self.train_prompt = train_prompt
+
+        self.PATTERN = ["text_a"] + ["SEP"]
+        self.BLOCK_FLAG = [0, 0]
+
+        if self.two_sided:
+            self.half = int(self.num_trainable_tokens/2)
+            assert self.num_trainable_tokens % 2 == 0
+            self.PATTERN += [str(i) for i in range(self.half)]
+            self.BLOCK_FLAG += [1 for i in range(self.half)]
+        else: 
+            self.PATTERN += [str(i) for i in range(self.num_trainable_tokens)]
+            self.BLOCK_FLAG += [1 for i in range(self.num_trainable_tokens)]
+
+        if self.use_prompt:
+            self.PATTERN += self.PROMPT
+            if self.train_prompt:
+                self.BLOCK_FLAG += [1 for _ in self.PROMPT]
+            else:
+                self.BLOCK_FLAG += [0 for _ in self.PROMPT]
+
+        self.PATTERN.append(self.LABEL)
+        self.BLOCK_FLAG +=[1 if self.train_verbalizer else 0]
+
+
+        if self.two_sided:
+             self.PATTERN += [str(i+ self.half) for i in range(self.half)]
+             self.BLOCK_FLAG += [1 for i in range(self.half)]
+
+        self.PATTERN += ["."]
+        self.BLOCK_FLAG += [1 if self.train_prompt else 0]
+
+        # self.BLOCK_FLAG = (
+        #     [0] 
+        #     + [0]
+        #     + [1] * self.num_trainable_tokens
+        #     + [1 if self.train_verbalizer else 0] + [0]
+        # )
+        # self.PATTERN = (
+        #     ["test_a"]
+        #     + [str(i) for i in range(self.num_trainable_tokens)]
+        #     + [self.LABEL, "."]
+        # )
+        # # self.label_position = -1 * (len(self.pattern) - self.PATTERN.index("label"))
+
+        # # text, sep token
+        # self.BLOCK_FLAG = [0] + [0]
 
     def get_parts(self, example: InputExample) -> FilledPattern:
         """
@@ -1031,14 +1069,17 @@ class EFL(PVP):
         :return: Two sequences of text. All text segments can optionally be marked as being shortenable.
         """
         part_a = [self.shortenable(example.text_a)]
-        if not self.two_sided:
-            for i in range(self.num_trainable_tokens):
-                part_a.append(
-                    str(i)
-                )  # TODO make sure these will all end up all trainable psuedotokens
-            part_a.append(self.LABEL)
-            part_a.append("</s>")
-            part_a.append(".")
+        part_a.append("</s>")
+        if self.two_sided:
+            part_a += [str(i) for i in range(int(self.num_trainable_tokens/2))]
+        else: 
+            part_a += [str(i) for i in range(self.num_trainable_tokens)]
+        if self.use_prompt:
+            part_a += self.PROMPT
+        part_a += [self.LABEL]
+        if self.two_sided:
+             part_a += [str(i+ int(self.num_trainable_tokens/2)) for i in range(int(self.num_trainable_tokens/2))]
+        part_a += ["."]
         block_flag_a = self.BLOCK_FLAG
         return part_a, [], block_flag_a, []
 
@@ -1046,21 +1087,25 @@ class EFL(PVP):
 class COLAEntailPVP(EFL):
 
     LABEL = "correct"
+    PROMPT = ["it", "was"]
 
 
 class SST2EntailPVP(EFL):
 
     LABEL = "great"
+    PROMPT = ["it", "was"]
 
 
 class MREntailPVP(EFL):
 
     LABEL = "great"
+    PROMPT = ["it", "was"]
 
 
 class SubjEntailPVP(EFL):
 
     LABEL = "objective"
+    PROMPT = ["This", "is"]
 
 PVPS = {
     # Super GLUE PVPs

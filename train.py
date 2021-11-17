@@ -123,7 +123,9 @@ def train_pet(args):
             # Training
             logger.info("--- Start iteration %d ---" % iteration)
             
+            
             stage = 0 if not train_config.parameter_efficient else 1 
+            print("stage", stage)
             if args.do_train:
                 if not args.two_stage_train:
                     # Single stage training
@@ -137,6 +139,7 @@ def train_pet(args):
                             wrapper,
                             train_config,
                             eval_config,
+                            stage = stage, 
                             extra_mask_rate=args.extra_mask_rate,
                         )
                     )  # Call to train_single_model

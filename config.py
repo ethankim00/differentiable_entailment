@@ -111,6 +111,7 @@ class WrapperConfig(object):
         train_verbalizer: bool = False,
         use_prompt: bool = False,
         two_sided: bool = False,
+        train_prompt: bool = False
     ):
         self.device = device
         self.model_type = model_type
@@ -129,6 +130,7 @@ class WrapperConfig(object):
         self.train_verbalizer = train_verbalizer
         self.use_prompt = use_prompt
         self.two_sided = two_sided
+        self.train_prompt = train_prompt
 
 
 def load_pet_configs(args) -> Tuple[WrapperConfig, TrainConfig, EvalConfig]:
@@ -152,6 +154,7 @@ def load_pet_configs(args) -> Tuple[WrapperConfig, TrainConfig, EvalConfig]:
         train_verbalizer = args.train_verbalizer,
         use_prompt = args.use_prompt,
         two_sided = args.two_sided,
+        train_prompt = args.train_prompt
     )
 
     train_cfg = TrainConfig(
@@ -171,6 +174,7 @@ def load_pet_configs(args) -> Tuple[WrapperConfig, TrainConfig, EvalConfig]:
         alpha=args.alpha,
         early_stop_epochs=args.early_stop_epochs,
         two_stage_train=args.two_stage_train,
+        parameter_efficient = args.parameter_efficient,
     )
 
     eval_cfg = EvalConfig(
