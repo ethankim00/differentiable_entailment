@@ -135,6 +135,7 @@ class PromptEncoder(object):
                     max_val = w[convert_id].abs().max()
                     w[convert_id].uniform_(-max_val, max_val)
                 else:
+                    print("Initializing from pretrained embedding for {}".format(origin_id))
                     w[convert_id] = w[origin_id]
             for origin_id, convert_id in self.label_convert.items():
                 if not origin_id in prompt_token_ids:
@@ -169,6 +170,7 @@ class PromptEncoder(object):
         trainable_ids = list(self.pattern_convert.values()) + list(
             self.label_convert.values()
         )
+        print(trainable_ids)
         grad_mask = torch.ones((self.vocab_size, 1), dtype=torch.float)
         grad_mask[trainable_ids, 0] = 0.0
 

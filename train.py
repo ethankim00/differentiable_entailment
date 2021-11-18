@@ -157,6 +157,7 @@ def train_pet(args):
                         os.path.join(pattern_iter_output_dir, "results.json"), "w"
                     ) as fh:
                         json.dump(results_dict, fh)
+                        
                 else:
                     # Two stage training
                     # 1. Only train prompts and label tokens Parameter efficient?, stage = 1 argument
@@ -329,6 +330,7 @@ def train_single_model(
             max_grad_norm=config.max_grad_norm,
             alpha=config.alpha,
             early_stop_epochs=config.early_stop_epochs,
+            wandb_log = True,
             **kwargs,
         )
         results_dict["global_step"] = global_step

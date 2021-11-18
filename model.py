@@ -47,7 +47,8 @@ from data_utils.pvps import ENTAILMENT_PVPS
 from config import WrapperConfig, EvalConfig
 from utils import InputExample, InputFeatures, DictDataset
 from encoder import PromptEncoder
-
+import transformers
+transformers.logging.set_verbosity_error()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("model")
 
@@ -144,9 +145,12 @@ class ContinuousPrompt(nn.Module):
                 #config.hidden_size = 1024
                 #self._copy_classification_head(model_config)
                 self.model.classifier = RobertaClassificationHead(model_config)
+                trainable_parameters = sum(p.numel() for p in self.model.classifier.parameters() if p.requires_grad)
+                print(trainable_parameters)
             else:
                 # copy over two class entailment classification head weights
                 self.model.classifier = RobertaClassificationHead(model_config)
+               
                 
             #self.model.classifier = RobertaClassificationHead(config)
             # add class aggregator
@@ -524,7 +528,7 @@ class TransformerModelWrapper(object):
             else:
                 # Training stage 0 / 2: optimize all model weights with different learning rates
                 # This is used when training LM ONLY!
-                handle = self.encoder.add_reverse_hook((cur_model.model))
+                #handle = self.encoder.add_reverse_hook((cur_model.model))
                 embedding_parameters = [
                     {
                         "params": [
@@ -544,6 +548,7 @@ class TransformerModelWrapper(object):
                 }
                 # Mask out gradients of tokens unrelated with prompt / label
                 if kwargs.get("fix_other_embeddings", False):
+                    print("fixing other embeddings")
                     handle = self.encoder.add_embed_hook(cur_model.model)
                     # embedding_parameters[0]['weight_decay'] = 0.0
 
@@ -564,7 +569,7 @@ class TransformerModelWrapper(object):
             embedding_parameters
         ):  # Use separate optimizer and learning rate schedule to train the embedding parameters
             optimizer_list.append(
-                AdamW(embedding_parameters, lr=learning_rate, eps=adam_epsilon)
+                AdamW(embedding_parameters, lr=3*learning_rate, eps=adam_epsilon)
             )
             scheduler_list.append(
                 get_linear_schedule_with_warmup(
@@ -627,11 +632,14 @@ class TransformerModelWrapper(object):
                     loss = self.task_helper.train_step(batch)
 
                 elif self.config.entailment:
-                    loss = self.entailment_train_step(batch)
+                    loss, accuracy = self.entailment_train_step(batch)
                     # print(cur_model.model.classifier.dense.weight)
                     # print(cur_model.model.get_input_embeddings()(torch.LongTensor([50165]).to(self.config.device))) #debug freezing embeddings
+                    # print(cur_model.model.get_input_embeddings()(torch.LongTensor([24]).to(self.config.device)))
                     # print(cur_model.model.get_input_embeddings()(torch.LongTensor([0]).to(self.config.device)))
                     # print(cur_model.model.roberta.encoder.layer[0].attention.self.query.weight) # Print some random model weights
+                    # [-0.0227, -0.1245, -0.1119,  ..., -0.0299, -0.1163, -0.1389]]
+                    # -0.1400, -0.0104,  0.0395,  ...,  0.0513, -0.0062, -0.0361
                 else:
                     loss = self.mlm_train_step(
                         batch
@@ -647,7 +655,12 @@ class TransformerModelWrapper(object):
                 loss.backward()
                 # self.scaler.scale(loss).backward()
                 tr_loss += loss.item()
-
+                if self.config.entailment:
+                    avg_loss = tr_loss/(global_step +1)
+                    wandb.log({"loss": avg_loss})
+                    train_iterator.set_postfix(avg_loss=avg_loss, tr_loss = tr_loss, loss = loss.item(),  accuracy = accuracy.item())
+                    if avg_loss > 0.5 and global_step > 60:
+                        break
                 if (step + 1) % gradient_accumulation_steps == 0:
                     writer.add_scalar(
                         "train_loss", (tr_loss - prev_loss), global_step=global_step
@@ -684,7 +697,7 @@ class TransformerModelWrapper(object):
                         dev_scores = dev_res["scores"]
                         log_scalars(dev_scores, "dev")
                         # Evaluate sample and save model on best performance
-                        if dev_scores[save_metric_name] >= best_dev_metric:
+                        if dev_scores[save_metric_name] > best_dev_metric:
                             if dev_scores[save_metric_name] > best_dev_metric:
                                 early_stop_count = 0
                                 logger.info(
@@ -734,6 +747,8 @@ class TransformerModelWrapper(object):
                     break
             if 0 < max_steps < global_step or early_stop_count >= early_stop_epochs:
                 train_iterator.close()
+                break
+            if avg_loss > 0.5 and global_step > 60:
                 break
 
         try:
@@ -949,6 +964,9 @@ class TransformerModelWrapper(object):
             # Binary class case
             loss = nn.CrossEntropyLoss()(entailment_logits.view(-1, 2), labels)
         # Do fluency constraint objective
+        # calculate accuracy:
+        predictions = entailment_logits.argmax(dim = 1, keepdim = True).squeeze()
+        accuracy= (predictions == labels).sum()/len(predictions) 
         if (
             "extra_mlm_labels" in labeled_batch
         ):  # is this the fluency constraint objective? Yes
@@ -962,7 +980,7 @@ class TransformerModelWrapper(object):
             _lambda = 0.05
             loss += _lambda * extra_loss
 
-        return loss
+        return loss, accuracy
 
     def entailment_eval_step(
         self, labeled_batch: Dict[str, torch.Tensor]
