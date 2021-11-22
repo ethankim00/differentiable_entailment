@@ -1107,6 +1107,24 @@ class SubjEntailPVP(EFL):
     LABEL = "objective"
     PROMPT = ["This", "is"]
 
+
+class OSEntailPVP(EFL):
+
+    LABEL = "hatespeech"
+    PROMPT = ["it", "was"]
+
+class IMDBEntailPVP(EFL):
+    LABEL = "great"
+    PROMPT = "it was"
+
+
+class MPQAEntailPVP(EFL):
+
+    LABEL = "positive"
+    PROMPT = "it was"
+
+
+
 PVPS = {
     # Super GLUE PVPs
     "rte": RtePVP,
