@@ -240,7 +240,7 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--num_trainable_tokens", type=int, default=1, help="Number of Trainable Pseudotokens"
+    "--num_trainable_tokens", type=int, default=0, help="Number of Trainable Pseudotokens"
 )
 
 parser.add_argument(

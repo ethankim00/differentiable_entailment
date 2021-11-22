@@ -660,7 +660,16 @@ class TransformerModelWrapper(object):
                     wandb.log({"loss": avg_loss})
                     train_iterator.set_postfix(avg_loss=avg_loss, tr_loss = tr_loss, loss = loss.item(),  accuracy = accuracy.item())
                     if avg_loss > 0.5 and global_step > 60:
+                        test_res = self.eval(
+                            eval_data,
+                            eval_config.per_gpu_eval_batch_size,
+                            n_gpu,
+                            eval_config.metrics,
+                            )
+                        logger.info("Final performance: %s" % str(eval_scores))
+                        log_scalars(eval_scores, "eval")
                         break
+
                 if (step + 1) % gradient_accumulation_steps == 0:
                     writer.add_scalar(
                         "train_loss", (tr_loss - prev_loss), global_step=global_step
@@ -749,6 +758,14 @@ class TransformerModelWrapper(object):
                 train_iterator.close()
                 break
             if avg_loss > 0.5 and global_step > 60:
+                test_res = self.eval(
+                    eval_data,
+                    eval_config.per_gpu_eval_batch_size,
+                    n_gpu,
+                    eval_config.metrics,
+                    )
+                logger.info("Final performance: %s" % str(eval_scores))
+                log_scalars(eval_scores, "eval")
                 break
 
         try:

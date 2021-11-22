@@ -107,7 +107,7 @@ class WrapperConfig(object):
         prompt_encoder_type="lstm",
         eval_every_step=40,
         entailment=False,
-        num_trainable_tokens: int = 1,
+        num_trainable_tokens: int = 0,
         train_verbalizer: bool = False,
         use_prompt: bool = False,
         two_sided: bool = False,
