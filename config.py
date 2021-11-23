@@ -37,12 +37,13 @@ class TrainConfig(PetConfig):
         gradient_accumulation_steps: int = 1,
         weight_decay: float = 0.0,
         learning_rate: float = 5e-5,
+        embed_learning_rate: float = 5e-5,
         learning_rate_stage1: float = 1e-4,
         adam_epsilon: float = 1e-8,
         warmup_steps: int = 0,
         max_grad_norm: float = 1,
         alpha: float = 0.9999,
-        early_stop_epochs: int = 5,
+        early_stop_epochs: int = 3,
         two_stage_train: bool = False,
         parameter_efficient: bool = False,
     ):
@@ -55,6 +56,7 @@ class TrainConfig(PetConfig):
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.weight_decay = weight_decay
         self.learning_rate = learning_rate
+        self.embed_learning_rate = embed_learning_rate
         self.learning_rate_stage1 = learning_rate_stage1
         self.adam_epsilon = adam_epsilon
         self.warmup_steps = warmup_steps
@@ -168,6 +170,7 @@ def load_pet_configs(args) -> Tuple[WrapperConfig, TrainConfig, EvalConfig]:
         weight_decay=args.weight_decay,
         learning_rate=args.learning_rate,
         learning_rate_stage1=args.learning_rate_stage1,
+        embed_learning_rate = args.embed_learning_rate,
         adam_epsilon=args.adam_epsilon,
         warmup_steps=args.warmup_steps,
         max_grad_norm=args.max_grad_norm,

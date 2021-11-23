@@ -145,8 +145,8 @@ class ContinuousPrompt(nn.Module):
                 #config.hidden_size = 1024
                 #self._copy_classification_head(model_config)
                 self.model.classifier = RobertaClassificationHead(model_config)
-                trainable_parameters = sum(p.numel() for p in self.model.classifier.parameters() if p.requires_grad)
-                print(trainable_parameters)
+                #trainable_parameters = sum(p.numel() for p in self.model.classifier.parameters() if p.requires_grad)
+                #print(trainable_parameters)
             else:
                 # copy over two class entailment classification head weights
                 self.model.classifier = RobertaClassificationHead(model_config)
@@ -200,8 +200,6 @@ class TransformerModelWrapper(object):
         # Load pattern verbalizer pairs based on config
         self.pvp = PVPS[config.task_name](self, config.pattern_id)
         if self.config.entailment:
-            print("Initializing PVP")
-            print(config.num_trainable_tokens)
             self.pvp = ENTAILMENT_PVPS[config.task_name](
                 self, config.pattern_id,
                 num_trainable_tokens = config.num_trainable_tokens,
@@ -211,6 +209,7 @@ class TransformerModelWrapper(object):
                 train_prompt = config.train_prompt,
             ) # TODO set up PVP initialization properky
         # Initialize continuous prmpt model
+        print("Prompting Pattern")
         print(self.pvp.PATTERN)
         print(self.pvp.BLOCK_FLAG)
         self.model = ContinuousPrompt(config, self.tokenizer, self.pvp)
@@ -328,7 +327,6 @@ class TransformerModelWrapper(object):
         #     print("did not load head")
         #     pass 
         if "classification_head" in os.listdir(path):
-            print("Loading PVP")
             wrapper.pvp = ENTAILMENT_PVPS[wrapper.config.task_name](
                 wrapper, wrapper.config.pattern_id,
                 num_trainable_tokens = wrapper.config.num_trainable_tokens,
@@ -393,11 +391,12 @@ class TransformerModelWrapper(object):
         gradient_accumulation_steps: int = 1,
         weight_decay: float = 0.0,
         learning_rate: float = 5e-5,
+        embed_learning_rate: float = 5e-5,
         adam_epsilon: float = 1e-8,
         warmup_steps=0,
         max_grad_norm: float = 1,
         max_steps=-1,
-        early_stop_epochs=10,
+        early_stop_epochs=3,
         **kwargs,
     ):
         """[summary]
@@ -502,6 +501,7 @@ class TransformerModelWrapper(object):
             if stage == 1:
                 # Training stage 1: only optimize prompt-related tokens
                 print("Training Stage 1")
+                print("Training Embedding and Classification Head Parameters with learning Rate {}".format(learning_rate))
                 handle = self.encoder.add_embed_hook(
                     cur_model.model
                 )  # Stage 1 set certain parameters with 0 weight decay
@@ -528,7 +528,12 @@ class TransformerModelWrapper(object):
             else:
                 # Training stage 0 / 2: optimize all model weights with different learning rates
                 # This is used when training LM ONLY!
-                #handle = self.encoder.add_reverse_hook((cur_model.model))
+                print("Training Stage {}".format(stage))
+                print("Optimizing Model Parameters with Learning Rate {}".format(learning_rate))
+                print("Optmizing Embedding Parameters with Learning Rate {}".format(embed_learning_rate))
+                if self.config.entailment and stage == 2: # Only freeze trained embedding parameters in training stage 2 
+                    handle = self.encoder.add_reverse_hook((cur_model.model))
+                    print("Freezing Pseudotoken Embeddings")
                 embedding_parameters = [
                     {
                         "params": [
@@ -555,7 +560,7 @@ class TransformerModelWrapper(object):
                 # TODO add logic to freeze or train clasification head for entailment
         optimizer_list, scheduler_list = [], []
         optimizer_list.append(
-            AdamW(optimizer_grouped_parameters, lr=1e-4, eps=adam_epsilon)
+            AdamW(optimizer_grouped_parameters, lr=learning_rate, eps=adam_epsilon)
         )
         scheduler_list.append(
             get_linear_schedule_with_warmup(
@@ -569,7 +574,7 @@ class TransformerModelWrapper(object):
             embedding_parameters
         ):  # Use separate optimizer and learning rate schedule to train the embedding parameters
             optimizer_list.append(
-                AdamW(embedding_parameters, lr=3*learning_rate, eps=adam_epsilon)
+                AdamW(embedding_parameters, lr=embed_learning_rate, eps=adam_epsilon)
             )
             scheduler_list.append(
                 get_linear_schedule_with_warmup(
@@ -590,6 +595,17 @@ class TransformerModelWrapper(object):
         best_global_step, early_stop_count, global_step = 0, 0, 0
         prev_loss, tr_loss = 0.0, 0.0
 
+        # Zero Shot Test Performance
+        test_res = self.eval(
+                            eval_data,
+                            eval_config.per_gpu_eval_batch_size,
+                            n_gpu,
+                            eval_config.metrics,
+                            )
+        eval_scores = test_res["scores"]
+        log_scalars(eval_scores, "eval")
+        logger.info("Zero Shot Performance on Test Data %s" %
+                    str(eval_scores))
         # Record dev metric scores in tensorboard
         # dev_scores = self.eval(
         #     dev_data, eval_config.per_gpu_eval_batch_size, n_gpu, eval_config.metrics)['scores']
@@ -657,17 +673,10 @@ class TransformerModelWrapper(object):
                 tr_loss += loss.item()
                 if self.config.entailment:
                     avg_loss = tr_loss/(global_step +1)
-                    wandb.log({"loss": avg_loss})
-                    train_iterator.set_postfix(avg_loss=avg_loss, tr_loss = tr_loss, loss = loss.item(),  accuracy = accuracy.item())
+                    #wandb.log({"loss": avg_loss})
+                    #wandb.log({"total_loss": tr_loss})
+                    train_iterator.set_postfix(avg_loss=avg_loss, tr_loss = tr_loss, loss = loss.item(),  accuracy = accuracy.item(), global_step = global_step)
                     if avg_loss > 0.5 and global_step > 60:
-                        test_res = self.eval(
-                            eval_data,
-                            eval_config.per_gpu_eval_batch_size,
-                            n_gpu,
-                            eval_config.metrics,
-                            )
-                        logger.info("Final performance: %s" % str(eval_scores))
-                        log_scalars(eval_scores, "eval")
                         break
 
                 if (step + 1) % gradient_accumulation_steps == 0:
@@ -764,6 +773,7 @@ class TransformerModelWrapper(object):
                     n_gpu,
                     eval_config.metrics,
                     )
+                eval_scores = test_res["scores"]
                 logger.info("Final performance: %s" % str(eval_scores))
                 log_scalars(eval_scores, "eval")
                 break

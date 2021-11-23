@@ -16,6 +16,7 @@ from collections import defaultdict
 from typing import List
 import torch
 import logging
+import gc 
 
 from model import TransformerModelWrapper
 from config import TrainConfig, EvalConfig, load_pet_configs
@@ -249,6 +250,8 @@ def train_pet(args):
                     json.dump(results_dict, fh)
 
             # Clear cache
+            print("clearing memory")
+            gc.collect()
             wrapper.model = None
             wrapper = None
             torch.cuda.empty_cache()
@@ -325,12 +328,13 @@ def train_single_model(
             gradient_accumulation_steps=config.gradient_accumulation_steps,
             weight_decay=config.weight_decay,
             learning_rate=lr,
+            embed_learning_rate = config.embed_learning_rate,
             adam_epsilon=config.adam_epsilon,
             warmup_steps=config.warmup_steps,
             max_grad_norm=config.max_grad_norm,
             alpha=config.alpha,
             early_stop_epochs=config.early_stop_epochs,
-            wandb_log = True,
+            wandb_log = False,
             **kwargs,
         )
         results_dict["global_step"] = global_step

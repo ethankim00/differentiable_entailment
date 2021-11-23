@@ -1,12 +1,12 @@
 export CUDA_VISIBLE_DEVICES=0 &&
 
 python3 cli.py \
---data_dir data/k-shot/SST-2/16-21 \
+--data_dir data/k-shot/subj/16-87 \
 --model_type roberta \
 --model_name_or_path roberta-large-mnli \
 --cache_dir pretrain/roberta-large-mnli \
---task_name SST-2 \
---output_dir output/sst2-inner-roberta \
+--task_name subj \
+--output_dir output/subj-inner-roberta \
 --do_eval \
 --do_train \
 --pet_per_gpu_eval_batch_size 8 \
@@ -14,26 +14,19 @@ python3 cli.py \
 --pet_gradient_accumulation_steps 1 \
 --pet_max_seq_length 128 \
 --pet_max_steps 250 \
---learning_rate 1e-4 \
+--learning_rate 5e-5 \
+--embed_learning_rate 1e-5 \
 --eval_set "test" \
 --prompt_encoder_type "inner" \
 --entailment 1.0 \
---num_trainable_tokens 5 \
---train_prompt 1 \
---train_verbalizer 1 \
+--num_trainable_tokens 0 \
+--train_verbalizer 0 \
 --use_prompt 1 \
 --two_sided 0 \
+--train_prompt 1 \
 --extra_mask_rate 0 \
---parameter_efficient \
-#--two_stage_train
-# text, 0, 1, 2 great . 
-# text, 0, 1, 2, it was great
-# 
-# [l1, l2] good #entail yes or no
-# [l1, l2] neutral
-# [l3, l3] bad
-# softmax oover -> 3 probabilities 0.6 0.4 0.4 -> softmax again -> 0.5 0.25 0.25
-# MNLI 
+#--two_stage_train \
+# --two_stage_train
 
 # Albert-xxlarge-v2
 

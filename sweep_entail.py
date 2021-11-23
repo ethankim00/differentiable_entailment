@@ -13,6 +13,7 @@
 """
 This script can be used to search the best hyper parameters for training.
 """
+#!/opt/conda/bin/python
 
 import os
 import logging
@@ -34,6 +35,8 @@ def main():
     config = wandb.config
     task, seed, encoder_type = config['task'], config['seed_split'], config['encoder_type']
     lr, wd, bs = config['learning_rate'], config['weight_decay'], config['batch_size']
+    #learning_rate_stage1 = config["learning_rate_stage1"]
+    embed_learning_rate = config["embed_learning_rate"]
 
     ########################################
     # Prepare full arguments
@@ -46,7 +49,7 @@ def main():
         data_dir = os.path.join('data', 'k-shot', task, data_split)
     task_dir = os.path.join('output', task, 'tune', encoder_type)
     output_dir = os.path.join(task_dir, data_split)
-
+    learning_rate_stage1 = 0
     arguments = ['--model_type', 'roberta',
                  '--embed_size', '1024',
                  '--do_train', '--do_eval',
@@ -54,18 +57,23 @@ def main():
                  '--overwrite_output_dir',
                  '--task_name', task,#.lower(),
                  '--data_dir', data_dir,
-                 '--pet_max_steps', '250',
+                 '--pet_max_steps', '400',
                  '--model_name_or_path', 'roberta-large-mnli',
                  '--cache_dir', 'pretrain/roberta-large-mnli',
                  '--pet_per_gpu_eval_batch_size', '8',
                  '--output_dir', output_dir,
                  '--learning_rate', str(lr),
+                 '--learning_rate_stage1', str(learning_rate_stage1),
+                 '--embed_learning_rate', str(embed_learning_rate),
                  '--weight_decay', str(wd),
                  '--prompt_encoder_type', encoder_type,
-                 '--entailment', str(1.0),
-                 '--use_prompt', str(1),
-                 '--train_prompt', str(1),
-                 '--train_verbalizer', str(1)]
+                '--entailment', str(1.0),
+                '--use_prompt', str(1),
+                '--train_prompt', str(1),
+                #'--two_stage_train'
+                #'--parameter_efficient'
+                #  '--train_verbalizer', str(1)]
+    ]
 
     if task in ['MNLI', 'MNLI-mm', 'SNLI', 'RTE-glue']:
         arguments.extend(['--pet_max_seq_length', '256',
@@ -98,20 +106,61 @@ def main():
     model = TransformerModelWrapper(model_config)
 
     # Train model
-    model.train(train_data=train_data,
-                dev_data=dev_data,
-                eval_data=eval_data,
-                pattern_iter_output_dir=args.output_dir,
-                eval_config=eval_config,
-                per_gpu_train_batch_size=train_config.per_gpu_train_batch_size,
-                n_gpu=train_config.n_gpu,
-                num_train_epochs=train_config.num_train_epochs,
-                max_steps=args.pet_max_steps,
-                gradient_accumulation_steps=train_config.gradient_accumulation_steps,
-                weight_decay=args.weight_decay,
-                learning_rate=args.learning_rate,
-                fix_other_embeddings=False,
-                wandb_log=False)
+    if not args.two_stage_train:
+        stage = 1 if args.parameter_efficient else 0
+        model.train(train_data=train_data,
+                    dev_data=dev_data,
+                    eval_data=eval_data,
+                    pattern_iter_output_dir=args.output_dir,
+                    eval_config=eval_config,
+                    per_gpu_train_batch_size=train_config.per_gpu_train_batch_size,
+                    n_gpu=train_config.n_gpu,
+                    num_train_epochs=train_config.num_train_epochs,
+                    max_steps=args.pet_max_steps,
+                    gradient_accumulation_steps=train_config.gradient_accumulation_steps,
+                    weight_decay=args.weight_decay,
+                    learning_rate=args.learning_rate,
+                    embed_learning_rate = args.embed_learning_rate, # TODO use train config/cli?
+                    fix_other_embeddings=False,
+                    stage = stage,
+                    wandb_log=True)
+
+    else:
+        # stage 1 stage 2
+        model.train(train_data=train_data,
+                    dev_data=dev_data,
+                    eval_data=eval_data,
+                    pattern_iter_output_dir=args.output_dir,
+                    eval_config=eval_config,
+                    per_gpu_train_batch_size=train_config.per_gpu_train_batch_size,
+                    n_gpu=train_config.n_gpu,
+                    num_train_epochs=train_config.num_train_epochs,
+                    max_steps=args.pet_max_steps,
+                    gradient_accumulation_steps=train_config.gradient_accumulation_steps,
+                    weight_decay=args.weight_decay,
+                    learning_rate=args.learning_rate_stage1,
+                    embed_learning_rate = args.embed_learning_rate, # TODO use train config/cli?
+                    fix_other_embeddings=False,
+                    stage = 1,
+                    wandb_log=True)
+
+        model.train(train_data=train_data,
+                    dev_data=dev_data,
+                    eval_data=eval_data,
+                    pattern_iter_output_dir=args.output_dir,
+                    eval_config=eval_config,
+                    per_gpu_train_batch_size=train_config.per_gpu_train_batch_size,
+                    n_gpu=train_config.n_gpu,
+                    num_train_epochs=train_config.num_train_epochs,
+                    max_steps=args.pet_max_steps,
+                    gradient_accumulation_steps=train_config.gradient_accumulation_steps,
+                    weight_decay=args.weight_decay,
+                    learning_rate=args.learning_rate,
+                    embed_learning_rate = args.embed_learning_rate, # TODO use train config/cli?
+                    fix_other_embeddings=False,
+                    stage = 2,
+                    wandb_log=True)
+
 
     run.finish()
 
@@ -142,14 +191,14 @@ if __name__ == '__main__':
     run_args = run_parser.parse_args()
 
     if not run_args.seed_split:  # Default search all seed splits
-        run_args.seed_split = [13, 21]# 87, 100]
+        run_args.seed_split = [13, 21, 87]# 100]
 
     if not run_args.batch_size:  # Default search all batch sizes
         if run_args.task in ['MNLI', 'MNLI-mm', 'SNLI', 'RTE-glue']:
             # Restrict maximum batch size due to memory limit
             run_args.batch_size = [4, 8, 16]
         else:
-            run_args.batch_size = [ 8]# 16]
+            run_args.batch_size = [16]# 16]
 
     # Prepare sweep config and get sweep id
     # TODO add control for other parameters
@@ -171,8 +220,10 @@ if __name__ == '__main__':
             'task': {'value': run_args.task},
             'encoder_type': {'value': run_args.encoder},
             'seed_split': {'values': run_args.seed_split},
-            'learning_rate': {'values': [1e-5, 1e-4, 2e-4]},
-            'weight_decay': {'values': [0.0, 0.10]},
+            'learning_rate': {'values': [1e-5, 5e-5]},
+            #'learning_rate_stage1' : {'values': [1e-5, 2e-5]},
+            'embed_learning_rate' : {'values': [1e-5, 5e-5, 1e-4]},
+            'weight_decay': {'values': [0.0, 0.05, 0.1]},
             'batch_size': {'values': run_args.batch_size}
         }
     }
