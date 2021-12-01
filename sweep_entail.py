@@ -70,6 +70,7 @@ def main():
                 '--entailment', str(1.0),
                 '--use_prompt', str(1),
                 '--train_prompt', str(1),
+                '--two-sided-entail', str(1),
                 #'--two_stage_train'
                 #'--parameter_efficient'
                 #  '--train_verbalizer', str(1)]
@@ -123,7 +124,8 @@ def main():
                     embed_learning_rate = args.embed_learning_rate, # TODO use train config/cli?
                     fix_other_embeddings=False,
                     stage = stage,
-                    wandb_log=True)
+                    wandb_log=True,
+                    two_sided_entail=args.two_sided_entail)
 
     else:
         # stage 1 stage 2
@@ -142,7 +144,9 @@ def main():
                     embed_learning_rate = args.embed_learning_rate, # TODO use train config/cli?
                     fix_other_embeddings=False,
                     stage = 1,
-                    wandb_log=True)
+                    wandb_log=True,
+                    two_sided_entail=args.two_sided_entail)
+
 
         model.train(train_data=train_data,
                     dev_data=dev_data,
@@ -159,7 +163,9 @@ def main():
                     embed_learning_rate = args.embed_learning_rate, # TODO use train config/cli?
                     fix_other_embeddings=False,
                     stage = 2,
-                    wandb_log=True)
+                    wandb_log=True,
+                    two_sided_entail=args.two_sided_entail)
+
 
 
     run.finish()

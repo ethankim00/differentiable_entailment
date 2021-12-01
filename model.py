@@ -648,7 +648,8 @@ class TransformerModelWrapper(object):
                     loss = self.task_helper.train_step(batch)
 
                 elif self.config.entailment:
-                    loss, accuracy = self.entailment_train_step(batch)
+                    two_sided_entail = kwargs.get("two_sided_entail")
+                    loss, accuracy = self.entailment_train_step(batch, two_sided_entail)
                     # print(cur_model.model.classifier.dense.weight)
                     # print(cur_model.model.get_input_embeddings()(torch.LongTensor([50165]).to(self.config.device))) #debug freezing embeddings
                     # print(cur_model.model.get_input_embeddings()(torch.LongTensor([24]).to(self.config.device)))
@@ -898,18 +899,60 @@ class TransformerModelWrapper(object):
         return evaluate_results(results, metrics)
 
     def expand_labeled_batch(
-        self, labeled_batch: Dict[str, torch.Tensor]
+        self, labeled_batch: Dict[str, torch.Tensor], two_sided = False,
     ) -> Dict[str, torch.Tensor]:
         """
         Expand batch for entailment training
 
         Args:
             labeled_batch (Dict[str, torch.Tensor]): Labled Instances
+            two_sided: If true, create two examples for each sample (binary classification only).
 
         Returns:
             Dict[str, torch.Tensor]: Expanded Batch with num_classes entries for each input instance
         """
-        if self.config.num_classes <= 2:
+        if two_sided:
+            assert self.config.num_classes <= 2 # Check for binary classification
+            expanded_batch = {}
+            for idx, instance in enumerate(labeled_batch["input_ids"]):
+                for cls_idx, output_class in enumerate(
+                    list(self.model.pvp.VERBALIZER.keys())
+                ):
+                    output_class_id = self.model.tokenizer.tokenize(output_class)
+                    output_class_trainable_id = self.model.label_convert[
+                        output_class_id
+                    ]
+                    # Have to identify the position of the label token -> save as verbalizer attribute
+                    instance[
+                        (
+                            instance["input_ids"] == self.encoder.entailment_label_id
+                        ).nonzero(as_tuple=True)[0]
+                    ] = output_class_trainable_id # Replace "label" placeholder with actual label
+                    expanded_batch["input_ids"].append(instance)
+                    expanded_batch["attention_mask"].append(
+                        labeled_batch["attention_mask"][idx]
+                    )
+                    expanded_batch["token_type_ids"].append(
+                        labeled_batch["token_type_ids"][idx]
+                    )
+                    label = labeled_batch["labels"][idx]
+                    # Flip label for negative case.
+                    # e.g., positive example: "it was good" -> entails, "it was bad" -> does not entail
+                    if output_class_trainable_id != self.encoder.entailment_label_id:
+                        label = not label
+                    expanded_batch["labels"].append(label)
+                    expanded_batch["mlm_labels"].append(
+                        labeled_batch["mlm_labels"][idx]
+                    )
+                    expanded_batch["logits"].append(labeled_batch["logits"][idx])
+                    expanded_batch["idx"].append(
+                        idx * self.config.num_classes + cls_idx
+                    )
+                    expanded_batch["block_flag"].append(
+                        labeled_batch["block_flag"][idx]
+                    )
+
+        elif self.config.num_classes <= 2:
             return labeled_batch
 
         else:
@@ -953,11 +996,11 @@ class TransformerModelWrapper(object):
         return DictDataset(**expanded_batch)
 
     def entailment_train_step(
-        self, labeled_batch: Dict[str, torch.Tensor]
+        self, labeled_batch: Dict[str, torch.Tensor], two_sided_entail = False
     ) -> torch.Tensor:
         # TODO expand forward pass here or in training loop
 
-        labeled_batch = self.expand_labeled_batch(labeled_batch) # it was LABEL -> it was good, it was bad, it was neutral B x num_labels
+        labeled_batch = self.expand_labeled_batch(labeled_batch, two_sided_entail) # it was LABEL -> it was good, it was bad, it was neutral B x num_labels
         inputs = self._generate_default_inputs(
             labeled_batch
         )  # some additional preprocessing on batch
