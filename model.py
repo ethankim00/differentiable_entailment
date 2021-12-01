@@ -396,7 +396,7 @@ class TransformerModelWrapper(object):
         warmup_steps=0,
         max_grad_norm: float = 1,
         max_steps=-1,
-        early_stop_epochs=3,
+        early_stop_epochs=5,
         **kwargs,
     ):
         """[summary]
@@ -422,10 +422,10 @@ class TransformerModelWrapper(object):
 
         def log_scalars(result_dict, set_type):
             # Write scalars with tensorboard
-            for metric, score in result_dict.items():
-                writer.add_scalar(
-                    set_type + "-" + metric, score, global_step=global_step
-                )
+            # for metric, score in result_dict.items():
+            #     writer.add_scalar(
+            #         set_type + "-" + metric, score, global_step=global_step
+            #     )
             if kwargs.get("wandb_log", False):
                 # Write scalars with wandb
                 wandb.log(
@@ -511,7 +511,7 @@ class TransformerModelWrapper(object):
                             p
                             for p in cur_model.model.get_input_embeddings().parameters()
                         ],
-                        "weight_decay": 0.0,
+                        "weight_decay": weight_decay,
                     }
                 ]
                 # Also finetune the classification head if we are doing entailment
@@ -522,7 +522,7 @@ class TransformerModelWrapper(object):
                             "params" : [
                                 p for p in cur_model.model.classifier.parameters()
                             ], 
-                            "weight_decay" : 0.0, 
+                            "weight_decay" : weight_decay, 
                         }
                     )
             else:
@@ -596,16 +596,16 @@ class TransformerModelWrapper(object):
         prev_loss, tr_loss = 0.0, 0.0
 
         # Zero Shot Test Performance
-        test_res = self.eval(
-                            eval_data,
-                            eval_config.per_gpu_eval_batch_size,
-                            n_gpu,
-                            eval_config.metrics,
-                            )
-        eval_scores = test_res["scores"]
-        log_scalars(eval_scores, "eval")
-        logger.info("Zero Shot Performance on Test Data %s" %
-                    str(eval_scores))
+        # test_res = self.eval(
+        #                     eval_data,
+        #                     eval_config.per_gpu_eval_batch_size,
+        #                     n_gpu,
+        #                     eval_config.metrics,
+        #                     )
+        # eval_scores = test_res["scores"]
+        # log_scalars(eval_scores, "eval")
+        # logger.info("Zero Shot Performance on Test Data %s" %
+        #             str(eval_scores))
         # Record dev metric scores in tensorboard
         # dev_scores = self.eval(
         #     dev_data, eval_config.per_gpu_eval_batch_size, n_gpu, eval_config.metrics)['scores']
@@ -673,8 +673,8 @@ class TransformerModelWrapper(object):
                 tr_loss += loss.item()
                 if self.config.entailment:
                     avg_loss = tr_loss/(global_step +1)
-                    #wandb.log({"loss": avg_loss})
-                    #wandb.log({"total_loss": tr_loss})
+                    wandb.log({"loss": avg_loss})
+                    wandb.log({"total_loss": tr_loss})
                     train_iterator.set_postfix(avg_loss=avg_loss, tr_loss = tr_loss, loss = loss.item(),  accuracy = accuracy.item(), global_step = global_step)
                     if avg_loss > 0.5 and global_step > 60:
                         break
@@ -764,6 +764,15 @@ class TransformerModelWrapper(object):
                 if 0 < max_steps < global_step or early_stop_count >= early_stop_epochs:
                     break
             if 0 < max_steps < global_step or early_stop_count >= early_stop_epochs:
+                test_res = self.eval(
+                    eval_data,
+                    eval_config.per_gpu_eval_batch_size,
+                    n_gpu,
+                    eval_config.metrics,
+                )
+                eval_scores = test_res["scores"]
+                logger.info("Final performance: %s" % str(eval_scores))
+                log_scalars(eval_scores, "eval")
                 train_iterator.close()
                 break
             if avg_loss > 0.5 and global_step > 60:

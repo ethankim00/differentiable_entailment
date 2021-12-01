@@ -1121,8 +1121,13 @@ class IMDBEntailPVP(EFL):
 class MPQAEntailPVP(EFL):
 
     LABEL = "positive"
-    PROMPT = "it was"
+    PROMPT = ["it",  "was"]
 
+
+class CREntailPVP(EFL):
+
+    LABEL = "great"
+    PROMPT = ["it", "was"]
 
 
 PVPS = {
@@ -1160,4 +1165,6 @@ ENTAILMENT_PVPS = {
     "SST-2" : SST2EntailPVP,
     "mr": MREntailPVP,
     "subj": SubjEntailPVP,
+    "cr": CREntailPVP,
+    "mpqa": MPQAEntailPVP,
 }

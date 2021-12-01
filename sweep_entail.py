@@ -49,7 +49,6 @@ def main():
         data_dir = os.path.join('data', 'k-shot', task, data_split)
     task_dir = os.path.join('output', task, 'tune', encoder_type)
     output_dir = os.path.join(task_dir, data_split)
-    learning_rate_stage1 = 0
     arguments = ['--model_type', 'roberta',
                  '--embed_size', '1024',
                  '--do_train', '--do_eval',
@@ -57,22 +56,26 @@ def main():
                  '--overwrite_output_dir',
                  '--task_name', task,#.lower(),
                  '--data_dir', data_dir,
-                 '--pet_max_steps', '400',
-                 '--model_name_or_path', 'roberta-large-mnli',
-                 '--cache_dir', 'pretrain/roberta-large-mnli',
+                 '--pet_max_steps', '250',
+                 '--model_name_or_path', 'ynie/roberta-large-snli_mnli_fever_anli_R1_R2_R3-nli',
+                 '--cache_dir', 'pretrain/ynie',
                  '--pet_per_gpu_eval_batch_size', '8',
                  '--output_dir', output_dir,
                  '--learning_rate', str(lr),
-                 '--learning_rate_stage1', str(learning_rate_stage1),
+                 #'--learning_rate_stage1', str(learning_rate_stage1),
                  '--embed_learning_rate', str(embed_learning_rate),
                  '--weight_decay', str(wd),
                  '--prompt_encoder_type', encoder_type,
                 '--entailment', str(1.0),
                 '--use_prompt', str(1),
                 '--train_prompt', str(1),
-                #'--two_stage_train'
-                #'--parameter_efficient'
-                #  '--train_verbalizer', str(1)]
+                '--num_trainable_tokens', str(5),
+                '--extra_mask_rate', str(0.15),
+                #'--two_stage_train',
+                #'--two_sided', str(1),
+                '--parameter_efficient',
+                '--train_verbalizer', str(1),
+                
     ]
 
     if task in ['MNLI', 'MNLI-mm', 'SNLI', 'RTE-glue']:
@@ -191,14 +194,14 @@ if __name__ == '__main__':
     run_args = run_parser.parse_args()
 
     if not run_args.seed_split:  # Default search all seed splits
-        run_args.seed_split = [13, 21, 87]# 100]
+        run_args.seed_split = [13, 21, 87, 42, 100]# 100]
 
     if not run_args.batch_size:  # Default search all batch sizes
         if run_args.task in ['MNLI', 'MNLI-mm', 'SNLI', 'RTE-glue']:
             # Restrict maximum batch size due to memory limit
             run_args.batch_size = [4, 8, 16]
         else:
-            run_args.batch_size = [16]# 16]
+            run_args.batch_size = [8, 16]# 16]
 
     # Prepare sweep config and get sweep id
     # TODO add control for other parameters
@@ -217,12 +220,12 @@ if __name__ == '__main__':
             'name': 'eval-' + load_metrics(run_args.task)[-1]
         },
         'parameters': {
-            'task': {'value': run_args.task},
+            'task': {'values': ['mr', 'cr', 'mpqa', 'SST-2']},
             'encoder_type': {'value': run_args.encoder},
             'seed_split': {'values': run_args.seed_split},
-            'learning_rate': {'values': [1e-5, 5e-5]},
-            #'learning_rate_stage1' : {'values': [1e-5, 2e-5]},
-            'embed_learning_rate' : {'values': [1e-5, 5e-5, 1e-4]},
+            'learning_rate': {'values': [5e-5, 1e-4, 3e-4]},
+            #'learning_rate_stage1' : {'values': [5e-5, 1e-4]},
+            'embed_learning_rate' : {'values': [1e-4]},
             'weight_decay': {'values': [0.0, 0.05, 0.1]},
             'batch_size': {'values': run_args.batch_size}
         }
