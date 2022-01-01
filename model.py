@@ -228,7 +228,7 @@ class TransformerModelWrapper(object):
             
             prompt_tokens = self.pvp.PROMPT + [self.pvp.LABEL] + ["."]
             prompt_token_ids = [self.tokenizer.encode(" " + pt)[1] for pt in prompt_tokens]
-            self.model.prompt_length = len(prompt_token_ids)
+            self.model.prompt_length = len(prompt_token_ids) + config.num_trainable_tokens
             #print(prompt_token_ids)
             if self.config.entailment:
                 self.encoder.init_embed(self.model.model, prompt_token_ids = prompt_token_ids)
@@ -1015,7 +1015,7 @@ class TransformerModelWrapper(object):
                 ),  # logits over entire vocabulary
                 extra_mlm_labels.view(-1),  # cross entropy over labels
             )
-            _lambda = 0.05
+            _lambda = 0.1
             loss += _lambda * extra_loss
 
         return loss, accuracy
