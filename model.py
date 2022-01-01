@@ -84,7 +84,9 @@ class ContinuousPrompt(nn.Module):
         prompt_length = 0
         for idx, val in enumerate(pvp.BLOCK_FLAG):
             if val == 1:
-                prompt_length += len(tokenizer.tokenize(pvp.PATTERN[idx]))
+                print(pvp.PATTERN[idx])
+                print(tokenizer.encode(pvp.PATTERN[idx], add_special_tokens=False))
+                prompt_length += len(tokenizer.encode(pvp.PATTERN[idx], add_special_tokens=False))
         self.prompt_length = prompt_length
 
         # config_class = MODEL_CLASSES[self.config.model_type]['config']
@@ -226,6 +228,7 @@ class TransformerModelWrapper(object):
             
             prompt_tokens = self.pvp.PROMPT + [self.pvp.LABEL] + ["."]
             prompt_token_ids = [self.tokenizer.encode(" " + pt)[1] for pt in prompt_tokens]
+            self.model.prompt_length = len(prompt_token_ids)
             #print(prompt_token_ids)
             if self.config.entailment:
                 self.encoder.init_embed(self.model.model, prompt_token_ids = prompt_token_ids)
@@ -233,7 +236,6 @@ class TransformerModelWrapper(object):
                 self.encoder.init_embed(self.model.model, random_=False)
             
                 
-
         if config.device == "cuda":
             if (
                 torch.cuda.device_count() > 1
@@ -344,7 +346,7 @@ class TransformerModelWrapper(object):
             prompt_length = 0
             for idx, val in enumerate(wrapper.pvp.BLOCK_FLAG):
                 if val == 1:
-                    prompt_length += len(wrapper.tokenizer.tokenize(wrapper.pvp.PATTERN[idx]))
+                    prompt_length += len(wrapper.tokenizer.encode(wrapper.pvp.PATTERN[idx]))
             wrapper.model.prompt_length = prompt_length
             model_config = AutoConfig.from_pretrained(
                 wrapper.config.model_name_or_path,
