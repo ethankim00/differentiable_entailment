@@ -977,6 +977,52 @@ class CRPVP(Sst2PVP):
     VERBALIZER = {"0": ["impossible"], "1": ["it"]}
 
 
+
+class EFLPair(PVP):
+    def __init__(
+        self,
+        *args,
+        num_trainable_tokens: int = 1,
+        use_prompt : bool = False,
+        train_prompt : bool = False, 
+        **kwargs
+        
+    ):
+        super(EFLPair, self).__init__(*args)
+        self.num_trainable_tokens = num_trainable_tokens
+        self.use_prompt = use_prompt  # TODO logic to include this
+        self.two_sided = kwargs.get("two_sided", 0)
+        self.train_prompt = train_prompt
+        self.PATTERN = ["text_a"] + ["SEP"] 
+        self.BLOCK_FLAG = [0, 0]
+        if use_prompt:
+            self.PATTERN += ["?"]
+            if self.train_prompt:
+                self.BLOCK_FLAG += [1]
+            else:
+                self.BLOCK_FLAG += [0]
+        self.PATTERN += [str(i) for i in range(self.num_trainable_tokens)]
+        self.BLOCK_FLAG += [1 for i in range(self.num_trainable_tokens)]
+        self.BLOCK_FLAG += [0]
+        self.PROMPT = ["?"]
+        self.LABEL = "entail"
+
+    def get_parts(self, example: InputExample) -> FilledPattern:
+        text_a = self.shortenable(example.text_a)
+        text_b = self.shortenable(example.text_b)
+        # few-shot
+        string_list_a = [text_a] + ["SEP"] 
+        if self.use_prompt:
+            string_list_a += ["?"]
+
+        string_list_a += [text_b]
+        string_list_b = []
+        block_flag_a = self.BLOCK_FLAG
+        block_flag_b = []
+        assert len(string_list_a) == len(block_flag_a)
+        assert len(string_list_b) == len(block_flag_b)
+        return string_list_a, string_list_b, block_flag_a, block_flag_b
+
 class EFL(PVP):
     """
     Base PVP class for the entailment setup
@@ -1130,6 +1176,19 @@ class CREntailPVP(EFL):
     PROMPT = ["it", "was"]
 
 
+class TrecPVP(EFL):
+
+
+    VERBALIZER = {
+        "0": ["Description"],
+        "1": ["Entity"],
+        "2": ["Expression"],
+        "3": ["Human"],
+        "4": ["Location"],
+        "5": ["Number"],
+    }
+    PROMPT : ["it", "was"]
+
 PVPS = {
     # Super GLUE PVPs
     "rte": RtePVP,
@@ -1167,4 +1226,7 @@ ENTAILMENT_PVPS = {
     "subj": SubjEntailPVP,
     "cr": CREntailPVP,
     "mpqa": MPQAEntailPVP,
+    "trec": TrecPVP,
+    "MNLI" : EFLPair,
+    "QQP": EFLPair,
 }

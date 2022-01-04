@@ -214,6 +214,7 @@ class TransformerModelWrapper(object):
         print("Prompting Pattern")
         print(self.pvp.PATTERN)
         print(self.pvp.BLOCK_FLAG)
+        print(self.config.label_list)
         self.model = ContinuousPrompt(config, self.tokenizer, self.pvp)
         self.task_helper = load_task_helper(config.task_name, self)
         self.label_map = {label: i for i, label in enumerate(self.config.label_list)}
@@ -398,7 +399,7 @@ class TransformerModelWrapper(object):
         warmup_steps=0,
         max_grad_norm: float = 1,
         max_steps=-1,
-        early_stop_epochs=5,
+        early_stop_epochs=2,
         **kwargs,
     ):
         """[summary]
@@ -534,8 +535,9 @@ class TransformerModelWrapper(object):
                 print("Optimizing Model Parameters with Learning Rate {}".format(learning_rate))
                 print("Optmizing Embedding Parameters with Learning Rate {}".format(embed_learning_rate))
                 if self.config.entailment and stage == 2: # Only freeze trained embedding parameters in training stage 2 
-                    handle = self.encoder.add_reverse_hook((cur_model.model))
-                    print("Freezing Pseudotoken Embeddings")
+                    pass
+                    #handle = self.encoder.add_reverse_hook((cur_model.model))
+                    #print("Freezing Pseudotoken Embeddings")
                 embedding_parameters = [
                     {
                         "params": [
@@ -922,45 +924,57 @@ class TransformerModelWrapper(object):
         """
         if self.config.num_classes <= 2:
             return labeled_batch
-
         else:
-            expanded_batch = {}
+            print("EXPANDING BATCH")
+            expanded_batch = {"input_ids": [],
+                "attention_mask" : [],
+                "token_type_ids" : [],
+                "labels": [],
+                "mlm_labels" : [],
+                "logits": [],
+                "idx" : [],
+                "block_flag" : [],
+
+            }
+            batch_size = labeled_batch["input_ids"].shape[0]
             for idx, instance in enumerate(labeled_batch["input_ids"]):
+                index = list(instance).index(self.encoder.entailment_label_id[0])
                 for cls_idx, output_class in enumerate(
-                    list(self.model.pvp.VERBALIZER.keys())
+                    list(self.pvp.VERBALIZER.values())
                 ):
-                    output_class_id = self.model.tokenizer.tokenize(output_class)
-                    output_class_trainable_id = self.model.label_convert[
-                        output_class_id
+                    new_instance = instance.detach().clone()
+                    output_class_id = self.model.tokenizer.encode(" " + output_class[0])
+                    output_class_trainable_id = self.encoder.label_convert[
+                        output_class_id[1]
                     ]
                     # Have to identify the position of the label token -> save as verbalizer attribute
-                    instance[
-                        (
-                            instance["input_ids"] == self.encoder.entailment_label_id
-                        ).nonzero(as_tuple=True)[0]
+                    new_instance[
+                       index
                     ] = output_class_trainable_id # Replace "label" placeholder with actual label
-                    expanded_batch["input_ids"].append(instance)
+                    expanded_batch["input_ids"].append(new_instance.reshape(1, -1))
                     expanded_batch["attention_mask"].append(
-                        labeled_batch["attention_mask"][idx]
+                        labeled_batch["attention_mask"][idx].reshape(1, -1)
                     )
                     expanded_batch["token_type_ids"].append(
-                        labeled_batch["token_type_ids"][idx]
+                        labeled_batch["token_type_ids"][idx].reshape(1, -1)
                     )
-                    expanded_batch["labels"].append(labeled_batch["labels"][idx])
+                    expanded_batch["labels"].append(labeled_batch["labels"][idx].unsqueeze(0))
                     expanded_batch["mlm_labels"].append(
-                        labeled_batch["mlm_labels"][idx]
+                        labeled_batch["mlm_labels"][idx].reshape(1, -1)
                     )
                     expanded_batch["logits"].append(labeled_batch["logits"][idx])
                     expanded_batch["idx"].append(
-                        idx * self.config.num_classes + cls_idx
+                        torch.Tensor([idx * self.config.num_classes + cls_idx])
                     )
                     expanded_batch["block_flag"].append(
-                        labeled_batch["block_flag"][idx]
+                        labeled_batch["block_flag"][idx].reshape(1, -1)
                     )
 
         # TODO check for inneficiencies transfering between devices
-        for key in expanded_batch.keys():
-            expanded_batch[key] = torch.tensor(expanded_batch[key])
+        for key in ['block_flag', 'input_ids', 'attention_mask', 'token_type_ids', 'labels', 'mlm_labels', 'logits', 'idx']:
+            out = torch.Tensor(len(list(self.pvp.VERBALIZER.values())) * batch_size, len(expanded_batch[key][0]))
+            torch.cat(expanded_batch[key], out = out)
+            expanded_batch[key] = out
         return DictDataset(**expanded_batch)
 
     def entailment_train_step(
@@ -1015,7 +1029,7 @@ class TransformerModelWrapper(object):
                 ),  # logits over entire vocabulary
                 extra_mlm_labels.view(-1),  # cross entropy over labels
             )
-            _lambda = 0.1
+            _lambda = 0.05
             loss += _lambda * extra_loss
 
         return loss, accuracy
