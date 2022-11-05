@@ -1,5 +1,4 @@
-# DART
-Implementation for paper *Differentiable Prompt Makes Pre-trained Language Models Better Few-shot Learners*.
+# Differentiable Entailment
 ## Environment
 - python@3.6
 - Use `pip install -r requirements.txt` to install dependencies.
@@ -33,8 +32,8 @@ optional arguments:
 - To find optimal hyper-parameters for each task-split and reproduce our result, please use `sweep.py`:
   - Please refer to documentation for [WandB](https://docs.wandb.ai/) for more details.
 ```bash
-$ python sweep.py -h
-usage: sweep.py [-h]
+$ python sweep_entail.py -h
+usage: sweep_entail.py [-h]
                 [--task {SST-2,sst-5,mr,cr,mpqa,subj,trec,CoLA,MNLI,MNLI-mm,SNLI,QNLI,RTE-glue,MRPC,QQP}]
                 [--encoder {none,mlp,lstm,inner,inner2}]
                 [--seed_split {13,21,42,87,100} [{13,21,42,87,100} ...]]
